@@ -309,3 +309,44 @@ details.cat .cat-list .msg {
   background: #0f2a1d; border: 1px solid #1f7a4d; color: #d1fae5; font-weight: 600;
 }
 .sso-connected button { margin-left: auto; }
+
+/* ---------- actions view (what is waiting on the commander) ---------- */
+.badge {
+  display: inline-block;
+  min-width: 1.1em;
+  margin-left: .35em;
+  padding: 0 .35em;
+  border-radius: 999px;
+  font-size: .72em;
+  line-height: 1.5;
+  text-align: center;
+  background: #c0392b;
+  color: #fff;
+}
+.action-group { margin: 0 0 1.4rem; }
+.action-group h3 {
+  margin: 0 0 .15rem;
+  font-size: .95rem;
+  display: flex;
+  align-items: baseline;
+  gap: .5rem;
+}
+.action-hint { margin: 0 0 .5rem; font-size: .78rem; }
+.action-list { list-style: none; margin: 0; padding: 0; }
+.action-row {
+  padding: .5rem .6rem;
+  border-left: 3px solid currentColor;
+  margin-bottom: .35rem;
+  background: rgba(127, 127, 127, .07);
+  border-radius: 0 4px 4px 0;
+}
+.action-primary {
+  font-size: .88rem;
+  line-height: 1.35;
+  /* Long DM bodies must not push the metadata off-screen on a phone. */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.action-secondary { font-size: .74rem; margin-top: .2rem; }

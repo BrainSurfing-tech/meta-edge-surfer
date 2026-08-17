@@ -21,6 +21,7 @@
 
   <nav id="tabs" role="tablist">
     <button class="tab active" data-view="inbox" role="tab">Inbox</button>
+    <button class="tab" data-view="actions" role="tab">You<span id="actions-badge" class="badge hidden"></span></button>
     <button class="tab" data-view="send" role="tab">Send</button>
     <button class="tab" data-view="highlights" role="tab">48h</button>
     <button class="tab" data-view="automations" role="tab">Automations</button>
@@ -68,6 +69,16 @@
         <button type="submit" id="send-btn" class="btn-primary">SEND</button>
         <div id="send-result" class="muted"></div>
       </form>
+    </section>
+
+    <section id="view-actions" class="view">
+      <div class="toolbar">
+        <button id="refresh-actions" class="btn-secondary">⟳ Refresh</button>
+        <span id="actions-meta" class="muted"></span>
+      </div>
+      <div id="actions-groups"></div>
+      <p id="actions-empty" class="empty hidden">Nothing is waiting on you.</p>
+      <p class="note">What the mesh cannot proceed without. Ordered by what blocks hardest: unanswered questions addressed to you, then overdue cards, then cards flagged ready to advance, then cards assigned to you. Everything else the cells handle themselves.</p>
     </section>
 
     <section id="view-highlights" class="view">
