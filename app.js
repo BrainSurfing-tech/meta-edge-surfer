@@ -339,11 +339,130 @@ function showView(name) {
   $$(".tab").forEach(t => t.classList.toggle("active", t.dataset.view === name));
   if (name === "inbox") refreshInbox();
   if (name === "send") populatePeers();
+  if (name === "actions") refreshActions();
   if (name === "highlights") refreshHighlights();
   if (name === "automations") refreshAutomations();
   if (name === "services") { refreshServices(); refreshLanes(); }
   if (name === "read") loadReadQueue();
   if (name === "settings") populateSettings();
+}
+
+// ---------- actions (what is waiting on the commander) ----------
+// Answers ONE question: what can the mesh not proceed without me?
+// Deliberately NOT a status board. Cells handle their own work; this shows only
+// items whose resolution requires this human, ordered by what blocks hardest.
+const ACTION_GROUPS = [
+  { key: "questions", label: "Questions waiting on you",  hint: "unanswered DMs addressed to you" },
+  { key: "overdue",   label: "Overdue",                   hint: "past their due date" },
+  { key: "ready",     label: "Ready to advance",          hint: "flagged move_ready, waiting on a call" },
+  { key: "assigned",  label: "Assigned to you",           hint: "carded to you, still open" },
+];
+
+// A card is DONE-ish and should never nag. Kept as one list so the four
+// groups below cannot drift apart on what "still open" means.
+const _CLOSED_STAGES = new Set(["done", "parked"]);
+
+async function refreshActions() {
+  const me = selfNode();
+  try {
+    setStatus("loading actions…");
+    const [msgRes, cardRes] = await Promise.all([
+      api(`/messages?to_node=${encodeURIComponent(me)}&limit=200`),
+      api(`/board/cards?limit=500`),
+    ]);
+    const msgs  = msgRes.messages || [];
+    const cards = cardRes.cards || [];
+
+    // A question is "waiting" only if unread. read_at is the gateway's own
+    // consumed-flag; do NOT infer from anything else.
+    const questions = msgs
+      .filter(m => m.kind === "question" && !m.read_at && m.from_node !== me)
+      .sort((a, b) => (b.id || 0) - (a.id || 0));
+
+    const open = cards.filter(c => !_CLOSED_STAGES.has(c.stage));
+    // due_state is computed server-side (#183a) — trust it rather than
+    // re-deriving date maths in the client and drifting from the board.
+    const overdue  = open.filter(c => c.due_state === "overdue" || (c.days_until != null && c.days_until < 0));
+    const ready    = open.filter(c => c.move_ready && !overdue.includes(c));
+    const assigned = open.filter(c => c.assignee === me && !overdue.includes(c) && !ready.includes(c));
+
+    renderActions({ questions, overdue, ready, assigned });
+    setStatus("");
+  } catch (e) {
+    setStatus("actions: " + e.message, "err");
+  }
+}
+
+// >>> BUILT WITH DOM APIs, NEVER innerHTML. <<< Same rule card #198 established
+// for the Read queue, and this view has the stronger case: `content` here is a DM
+// body written by ANOTHER CELL, and `title` is a board card any peer can create.
+// That is not the self-XSS the Read queue faces today — it is already the
+// cross-cell case, rendering one cell's text in the commander's browser.
+function _actionRow(primary, secondary, when) {
+  const li = document.createElement("li");
+  li.className = "action-row";
+
+  const p = document.createElement("div");
+  p.className = "action-primary";
+  p.textContent = primary || "";
+  li.appendChild(p);
+
+  const sec = document.createElement("div");
+  sec.className = "action-secondary muted";
+  sec.textContent = secondary + (when ? ` · ${fmtTime(when)}` : "");
+  li.appendChild(sec);
+
+  return li;
+}
+
+function renderActions(groups) {
+  const total = ACTION_GROUPS.reduce((n, g) => n + (groups[g.key] || []).length, 0);
+
+  const badge = $("#actions-badge");
+  if (badge) {
+    badge.textContent = total > 99 ? "99+" : String(total);
+    badge.classList.toggle("hidden", total === 0);
+  }
+  $("#actions-meta").textContent = total === 0 ? "" : `${total} waiting`;
+  $("#actions-empty").classList.toggle("hidden", total > 0);
+
+  const root = $("#actions-groups");
+  root.replaceChildren();
+
+  ACTION_GROUPS.forEach((g) => {
+    const items = groups[g.key] || [];
+    if (!items.length) return;
+
+    const sec = document.createElement("section");
+    sec.className = "action-group";
+
+    const h = document.createElement("h3");
+    h.append(document.createTextNode(g.label + " "));
+    const cnt = document.createElement("span");
+    cnt.className = "count";
+    cnt.textContent = String(items.length);
+    h.appendChild(cnt);
+    sec.appendChild(h);
+
+    const hint = document.createElement("p");
+    hint.className = "muted action-hint";
+    hint.textContent = g.hint;
+    sec.appendChild(hint);
+
+    const ul = document.createElement("ul");
+    ul.className = "action-list";
+    items.forEach((it) => {
+      if (it.kind === "question") {
+        ul.appendChild(_actionRow(it.content || "", `from ${it.from_node} · #${it.id}`, it.created_at));
+      } else {
+        const meta = [it.stage, it.assignee ? `@${it.assignee}` : null,
+                      it.priority != null ? `p${it.priority}` : null].filter(Boolean).join(" · ");
+        ul.appendChild(_actionRow(`#${it.id} ${it.title || ""}`, meta, it.due_at || it.updated_at));
+      }
+    });
+    sec.appendChild(ul);
+    root.appendChild(sec);
+  });
 }
 
 // ---------- inbox ----------
