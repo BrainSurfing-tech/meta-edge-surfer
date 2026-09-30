@@ -49,16 +49,40 @@ html, body {
 .status.ok { color: var(--accent-2); }
 .status.err { color: var(--danger); }
 
-#tabs {
-  display: flex;
+#nav-bar {
   background: var(--panel);
   border-bottom: 1px solid var(--border);
   position: sticky;
   top: 38px;
   z-index: 9;
+  padding: 0 8px;
 }
+#nav-toggle {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--tap);
+  min-width: var(--tap);
+  background: transparent;
+  color: var(--fg);
+  border: 0;
+  font: inherit;
+  font-size: 22px;
+  cursor: pointer;
+}
+#tabs {
+  display: none;
+  flex-direction: column;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 82px;
+  z-index: 9;
+}
+#tabs.open { display: flex; }
 .tab {
-  flex: 1 1 auto;
+  flex: 0 0 auto;
+  text-align: left;
+  padding: 0 14px;
   min-height: var(--tap);
   background: transparent;
   color: var(--muted);
@@ -340,6 +364,18 @@ details.cat .cat-list .msg {
   background: rgba(127, 127, 127, .07);
   border-radius: 0 4px 4px 0;
 }
+.board-q { margin: .6rem 0 .8rem; }
+.board-q .reply {
+  width: 100%;
+  margin: .4rem 0;
+  font: inherit;
+  color: var(--fg);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: .4rem;
+}
+.board-where { white-space: pre-wrap; margin: .2rem 0 .4rem; }
 .action-primary {
   font-size: .88rem;
   line-height: 1.35;
