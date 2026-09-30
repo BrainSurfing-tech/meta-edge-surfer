@@ -362,6 +362,163 @@ const ACTION_GROUPS = [
 // groups below cannot drift apart on what "still open" means.
 const _CLOSED_STAGES = new Set(["done", "parked"]);
 
+function boardEnvelope(text) {
+  return typeof text === "string" && text.startsWith("SWARPH-BOARD v1\n");
+}
+
+function parseBoardDm(content) {
+  if (!boardEnvelope(content)) return null;
+  try {
+    const data = JSON.parse(content.slice("SWARPH-BOARD v1\n".length));
+    return data && typeof data === "object" ? data : null;
+  } catch {
+    return null;
+  }
+}
+
+function newestBoardDm(messages) {
+  const boards = (messages || []).filter(
+    (m) => m && m.from_node === "lab-ovh" && boardEnvelope(m.content) && parseBoardDm(m.content));
+  boards.sort((a, b) => (b.id || 0) - (a.id || 0));
+  return boards[0] || null;
+}
+
+function visibleInbox(messages) {
+  return (messages || []).filter((m) => !boardEnvelope(m && m.content));
+}
+
+function dedupeYou(groups, board) {
+  const cards = new Set();
+  const titles = new Set();
+  for (const sess of (board && board.sessions) || []) {
+    for (const q of sess.questions || []) {
+      if (q.card != null) cards.add(String(q.card));
+      if (q.title) titles.add(String(q.title).trim());
+    }
+  }
+  const dropCard = (list) => (list || []).filter((c) => !cards.has(String(c.id)));
+  return {
+    questions: (groups.questions || []).filter((m) => {
+      if (boardEnvelope(m.content)) return false;
+      const text = String(m.content || "").trim();
+      return !titles.has(text);
+    }),
+    overdue: dropCard(groups.overdue),
+    ready: dropCard(groups.ready),
+    assigned: dropCard(groups.assigned),
+  };
+}
+
+function questionSendControl(question, sessionName) {
+  if (question && question.in_session) {
+    return { send: false, note: "Answer in " + sessionName };
+  }
+  const options = (question && question.options) || [];
+  const picked = options.find((o) => o.rec) || options[0] || null;
+  return {
+    send: true,
+    note: "Send decision",
+    reply: picked ? (picked.text || "") : "",
+    selected: picked ? picked.label : "",
+  };
+}
+
+function sendBoardDecision(question, reply) {
+  return apiSend(question.to_node, "answer", "Re: " + question.title + "\n" + reply, ["lab-ovh"]);
+}
+
+function _whereText(where) {
+  if (Array.isArray(where)) return where.filter(Boolean).join("\n");
+  return where || "";
+}
+
+function renderBoard(board) {
+  const root = $("#board-sections");
+  if (!root) return 0;
+  root.replaceChildren();
+  if (!board) return 0;
+  let n = 0;
+  const seen = new Set();
+  for (const sess of board.sessions || []) {
+    const sec = document.createElement("section");
+    sec.className = "action-group";
+    const h = document.createElement("h3");
+    h.textContent = sess.name || "cell";
+    sec.appendChild(h);
+    const stateEl = document.createElement("p");
+    stateEl.className = "action-primary";
+    stateEl.textContent = sess.state || "";
+    sec.appendChild(stateEl);
+    const where = document.createElement("p");
+    where.className = "muted board-where";
+    where.textContent = _whereText(sess.where);
+    sec.appendChild(where);
+    for (const q of sess.questions || []) {
+      const key = q.id != null ? String(q.id) : `${sess.name}:${q.title}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      n += 1;
+      sec.appendChild(_boardQuestion(q, sess.name || ""));
+    }
+    root.appendChild(sec);
+  }
+  return n;
+}
+
+function _boardQuestion(question, sessionName) {
+  const wrap = document.createElement("div");
+  wrap.className = "board-q";
+  const title = document.createElement("div");
+  title.className = "action-primary";
+  title.textContent = question.title || "";
+  wrap.appendChild(title);
+  const ctrl = questionSendControl(question, sessionName);
+  const options = question.options || [];
+  if (!question.in_session) {
+    options.forEach((opt, i) => {
+      const label = document.createElement("label");
+      const radio = document.createElement("input");
+      radio.type = "radio";
+      radio.name = `board-q-${question.id}`;
+      radio.checked = !!opt.rec || (!options.some((o) => o.rec) && i === 0);
+      radio.addEventListener("change", () => {
+        const box = wrap.querySelector("textarea");
+        if (box) box.value = opt.text || "";
+      });
+      label.appendChild(radio);
+      label.appendChild(document.createTextNode(" " + (opt.label || "")));
+      wrap.appendChild(label);
+    });
+    const box = document.createElement("textarea");
+    box.className = "reply";
+    box.rows = 3;
+    box.value = ctrl.reply || "";
+    wrap.appendChild(box);
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn-primary";
+    btn.textContent = "Send decision";
+    btn.addEventListener("click", () => {
+      sendBoardDecision(question, box.value).catch((e) => setStatus("send: " + e.message, "err"));
+    });
+    wrap.appendChild(btn);
+  } else {
+    const note = document.createElement("p");
+    note.textContent = ctrl.note;
+    wrap.appendChild(note);
+  }
+  return wrap;
+}
+
+function toggleNav(force) {
+  const nav = document.getElementById("tabs");
+  const btn = document.getElementById("nav-toggle");
+  if (!nav || !btn) return;
+  const open = force === undefined ? !nav.classList.contains("open") : !!force;
+  nav.classList.toggle("open", open);
+  btn.setAttribute("aria-expanded", open ? "true" : "false");
+}
+
 async function refreshActions() {
   const me = selfNode();
   try {
@@ -386,7 +543,11 @@ async function refreshActions() {
     const ready    = open.filter(c => c.move_ready && !overdue.includes(c));
     const assigned = open.filter(c => c.assignee === me && !overdue.includes(c) && !ready.includes(c));
 
-    renderActions({ questions, overdue, ready, assigned });
+    const boardMsg = newestBoardDm(msgs);
+    const board = boardMsg ? parseBoardDm(boardMsg.content) : null;
+    const grouped = dedupeYou({ questions, overdue, ready, assigned }, board);
+    const boardCount = renderBoard(board);
+    renderActions(grouped, boardCount);
     setStatus("");
   } catch (e) {
     setStatus("actions: " + e.message, "err");
@@ -415,8 +576,8 @@ function _actionRow(primary, secondary, when) {
   return li;
 }
 
-function renderActions(groups) {
-  const total = ACTION_GROUPS.reduce((n, g) => n + (groups[g.key] || []).length, 0);
+function renderActions(groups, extra = 0) {
+  const total = extra + ACTION_GROUPS.reduce((n, g) => n + (groups[g.key] || []).length, 0);
 
   const badge = $("#actions-badge");
   if (badge) {
@@ -578,10 +739,11 @@ async function refreshInbox() {
   try {
     setStatus("loading…");
     const { messages } = await apiInbox(50);
-    state.inbox = messages;
-    renderMessages($("#inbox-list"), messages);
-    $("#inbox-count").textContent = `${messages.length} message${messages.length === 1 ? "" : "s"}`;
-    $("#inbox-empty").classList.toggle("hidden", messages.length > 0);
+    const visible = visibleInbox(messages);
+    state.inbox = visible;
+    renderMessages($("#inbox-list"), visible);
+    $("#inbox-count").textContent = `${visible.length} message${visible.length === 1 ? "" : "s"}`;
+    $("#inbox-empty").classList.toggle("hidden", visible.length > 0);
     setStatus(`ok · ${new Date().toLocaleTimeString()}`, "ok");
   } catch (e) {
     setStatus("err: " + e.message, "err");
@@ -1039,15 +1201,21 @@ async function claimPendingInvite() {
 function startPollLoop() {
   if (state.pollTimer) clearInterval(state.pollTimer);
   if (!state.token) return;
-  refreshInbox();
-  state.pollTimer = setInterval(() => {
-    if ($("#view-inbox").classList.contains("active")) refreshInbox();
-  }, state.pollSec * 1000);
+  const tick = () => {
+    if ($("#view-inbox")?.classList.contains("active")) refreshInbox();
+    if ($("#view-actions")?.classList.contains("active")) refreshActions();
+  };
+  tick();
+  state.pollTimer = setInterval(tick, state.pollSec * 1000);
 }
 
 // ---------- wire ----------
 window.addEventListener("DOMContentLoaded", async () => {
-  $$(".tab").forEach(t => t.addEventListener("click", () => showView(t.dataset.view)));
+  $("#nav-toggle")?.addEventListener("click", () => toggleNav());
+  $$(".tab").forEach(t => t.addEventListener("click", () => {
+    showView(t.dataset.view);
+    toggleNav(false);
+  }));
   $("#refresh-inbox").addEventListener("click", refreshInbox);
   $("#read-send")?.addEventListener("click", sendToRead);
   $("#read-refresh")?.addEventListener("click", loadReadQueue);
@@ -1072,7 +1240,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   if (ssoActive && pendingInvite) {
     // Already signed in with a pending invite → claim it, then land on inbox.
     await claimPendingInvite();
-    showView("inbox");
+    showView("actions");
     startPollLoop();
   } else if (pendingInvite && !ssoActive) {
     // Invited but not signed in → show the join prompt and carry the invite THROUGH
@@ -1088,7 +1256,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     showView("settings");
     setStatus("sign in or paste a token — Settings", "err");
   } else {
-    showView("inbox");
+    showView("actions");
     startPollLoop();
   }
   renderAuthState();   // reflect SSO connected-state in Settings

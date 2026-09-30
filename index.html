@@ -19,9 +19,12 @@
     <div class="status" id="status">…</div>
   </header>
 
+  <div id="nav-bar">
+    <button type="button" id="nav-toggle" aria-controls="tabs" aria-expanded="false" aria-label="Menu">☰</button>
+  </div>
   <nav id="tabs" role="tablist">
-    <button class="tab active" data-view="inbox" role="tab">Inbox</button>
-    <button class="tab" data-view="actions" role="tab">You<span id="actions-badge" class="badge hidden"></span></button>
+    <button class="tab active" data-view="actions" role="tab">You<span id="actions-badge" class="badge hidden"></span></button>
+    <button class="tab" data-view="inbox" role="tab">Inbox</button>
     <button class="tab" data-view="send" role="tab">Send</button>
     <button class="tab" data-view="highlights" role="tab">48h</button>
     <button class="tab" data-view="automations" role="tab">Automations</button>
@@ -31,7 +34,7 @@
   </nav>
 
   <main id="views">
-    <section id="view-inbox" class="view active">
+    <section id="view-inbox" class="view">
       <div class="toolbar">
         <button id="refresh-inbox" class="btn-secondary">⟳ Refresh</button>
         <span id="inbox-count" class="muted"></span>
@@ -71,11 +74,12 @@
       </form>
     </section>
 
-    <section id="view-actions" class="view">
+    <section id="view-actions" class="view active">
       <div class="toolbar">
         <button id="refresh-actions" class="btn-secondary">⟳ Refresh</button>
         <span id="actions-meta" class="muted"></span>
       </div>
+      <div id="board-sections"></div>
       <div id="actions-groups"></div>
       <p id="actions-empty" class="empty hidden">Nothing is waiting on you.</p>
       <p class="note">What the mesh cannot proceed without. Ordered by what blocks hardest: unanswered questions addressed to you, then overdue cards, then cards flagged ready to advance, then cards assigned to you. Everything else the cells handle themselves.</p>
