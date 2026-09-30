@@ -96,6 +96,18 @@ html, body {
 .tab.active { color: var(--fg); border-bottom-color: var(--accent); }
 
 main#views { padding: 12px; padding-bottom: max(env(safe-area-inset-bottom), 24px); }
+/* Desktop (#1007): one centred column; tabs inline, no hamburger. */
+main#views { max-width: 760px; margin: 0 auto; }
+@media (min-width: 768px) {
+  #nav-bar { display: none; }
+  #tabs {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    top: 38px;
+    padding: 0 max(0px, calc(50% - 380px));
+  }
+}
 .view { display: none; }
 .view.active { display: block; }
 
@@ -125,7 +137,9 @@ label {
   font-size: 14px;
   color: var(--muted);
 }
-input, select, textarea {
+/* Text-like inputs fill the row. A radio/checkbox keeps its natural box so
+   it can sit on the same line as its label (#1007). */
+input:not([type="radio"]):not([type="checkbox"]), select, textarea {
   display: block;
   width: 100%;
   margin-top: 4px;
@@ -347,7 +361,7 @@ details.cat .cat-list .msg {
   background: #c0392b;
   color: #fff;
 }
-.action-group { margin: 0 0 1.4rem; }
+.action-group { margin: 0 0 .9rem; }
 .action-group h3 {
   margin: 0 0 .15rem;
   font-size: .95rem;
@@ -358,16 +372,49 @@ details.cat .cat-list .msg {
 .action-hint { margin: 0 0 .5rem; font-size: .78rem; }
 .action-list { list-style: none; margin: 0; padding: 0; }
 .action-row {
-  padding: .5rem .6rem;
+  padding: .4rem .6rem;
   border-left: 3px solid currentColor;
   margin-bottom: .35rem;
   background: rgba(127, 127, 127, .07);
   border-radius: 0 4px 4px 0;
 }
-.board-q { margin: .6rem 0 .8rem; }
+.board-q { padding-bottom: .6rem; }
+.board-cell > summary.eyebrow {
+  font-size: .72rem;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--muted);
+  cursor: pointer;
+  margin-bottom: .2rem;
+}
+.board-where { white-space: pre-wrap; margin: .2rem 0 .4rem; }
+/* Explicit, not just the UA's closed-details skip: a closed fold has no box. */
+details.board-cell:not([open]) > .board-where { display: none; }
+/* One option = one tappable row: the radio and its label share the line. */
+.board-opt {
+  display: flex;
+  align-items: center;
+  gap: .65rem;
+  min-height: var(--tap);
+  margin: 0;
+  padding: 0 .4rem;
+  color: var(--fg);
+  font-size: .95rem;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.board-opt:has(input:checked) { background: rgba(110, 168, 254, .12); }
+.board-opt input {
+  margin: 0;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  accent-color: var(--accent);
+}
 .board-q .reply {
   width: 100%;
-  margin: .4rem 0;
+  min-height: 0;
+  margin: .4rem 0 0;
   font: inherit;
   color: var(--fg);
   background: var(--panel-2);
@@ -375,7 +422,29 @@ details.cat .cat-list .msg {
   border-radius: 6px;
   padding: .4rem;
 }
-.board-where { white-space: pre-wrap; margin: .2rem 0 .4rem; }
+.board-act {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: .5rem;
+  margin-top: .4rem;
+}
+.btn-link {
+  background: none;
+  border: 0;
+  color: var(--accent);
+  font: inherit;
+  font-size: .88rem;
+  min-height: var(--tap);
+  padding: 0 .4rem;
+  cursor: pointer;
+}
+.board-send-err { flex-basis: 100%; margin: 0; color: var(--danger); font-size: .8rem; }
+.board-send-err:empty { display: none; }
+.action-group.quiet h3 { color: var(--muted); }
+details.action-group > summary { cursor: pointer; list-style-position: inside; }
+details.action-group > summary h3 { display: inline-flex; }
 .action-primary {
   font-size: .88rem;
   line-height: 1.35;

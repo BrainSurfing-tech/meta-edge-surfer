@@ -23,6 +23,7 @@ function extract(name) {
 }
 
 const apiSendSrc = src.slice(src.indexOf("const apiSend ="), src.indexOf("const apiSchedEvents"));
+const actionGroupsSrc = src.slice(src.indexOf("const ACTION_GROUPS = ["), src.indexOf("];", src.indexOf("const ACTION_GROUPS = [")) + 2);
 const ctx = {
   state: { token: "tok", base: "http://stub.invalid" },
   ssoActive: false,
@@ -125,7 +126,11 @@ assert.ok(!html.includes('id="view-inbox" class="view active"'));
 assert.ok(html.includes('id="nav-toggle"'), "hamburger control is in the page");
 assert.ok(css.includes("#nav-toggle") && css.includes("display: inline-flex"));
 assert.ok(css.includes("#tabs.open { display: flex; }"));
-assert.equal(css.includes("@media"), false, "the menu is a hamburger at 360px and on desktop");
+assert.ok(/@media \(min-width: 768px\)/.test(css) && /#nav-bar \{ display: none; \}/.test(css),
+  "hamburger at 360px; tabs inline from 768px");
+assert.ok(css.includes('input:not([type="radio"]):not([type="checkbox"]), select, textarea'),
+  "a radio keeps its natural box (fix 1)");
+assert.ok(css.includes("main#views { max-width: 760px; margin: 0 auto; }"), "centred column (fix 7)");
 assert.ok(firstTab > 0);
 
 // card #1007 rework: sent state and the poll clamp. These fail at 40e71c0,
@@ -155,9 +160,10 @@ vm.runInContext(
   `  if (!res.ok) throw new Error(res.status + " " + res.statusText);\n` +
   `  return res.json();\n` +
   `}\n${apiSendSrc}\n${extract("sendBoardDecision")}\n` +
-  `${extract("boardSentId")}\n${extract("rememberBoardSent")}\n` +
-  `${extract("boardQuestionOffered")}\n${extract("deliverBoardDecision")}\n` +
-  `${extract("clampPollSeconds")}\n`,
+  `${extract("boardSentRecord")}\n${extract("rememberBoardSent")}\n` +
+  `${extract("boardQuestionOffered")}\n${extract("boardSentText")}\n${extract("fmtTime")}\n` +
+  `${extract("deliverBoardDecision")}\n${extract("clampPollSeconds")}\n` +
+  `${extract("boardBuckets")}\n${extract("youCount")}\n${actionGroupsSrc}\n`,
   clickCtx);
 
 const q = board.sessions[0].questions[0];
@@ -167,21 +173,43 @@ const button = {
   textContent: "Send decision",
   parentElement: { querySelector() { return err; } },
 };
-const first = clickCtx.deliverBoardDecision(button, q, "Yes, ship");
-const second = clickCtx.deliverBoardDecision(button, q, "Yes, ship");
+// #1007 fixes 2+3: the badge counts decidable unsent questions + the older
+// groups; a send drops it by one without a refetch, and the stored record
+// carries the chosen label + time, not only the message id.
+const olderGroups = { questions: [plain], overdue: [{ id: 13 }], ready: [], assigned: [{ id: 14 }] };
+const before = clickCtx.boardBuckets(board);
+assert.deepEqual([...before.decidable.map((it) => it.q.id)], ["obl-1"]);
+assert.deepEqual([...before.inSession.map((it) => it.q.id)], ["obl-2"], "in-session is shown, not counted");
+assert.equal(clickCtx.youCount({ ...olderGroups, ...before }), 4, "1 decidable + 3 older items");
+
+const first = clickCtx.deliverBoardDecision(button, q, "Yes, ship", "Ship");
+const second = clickCtx.deliverBoardDecision(button, q, "Yes, ship", "Ship");
 await first;
 await second;
 assert.equal(clickCtx.calls.length, 1, "two clicks, one POST");
 assert.equal(button.disabled, true);
-assert.equal(button.textContent, "sent 42");
+assert.match(button.textContent, /^Sent: Ship · \d+s ago$/, "the row names the decision, not the id");
 assert.equal(clickCtx.boardQuestionOffered(q), false, "a reload does not re-offer a sent question");
+const after = clickCtx.boardBuckets(board);
+assert.equal(after.decidable.length, 0);
+assert.deepEqual([...after.sent.map((it) => it.q.id)], ["obl-1"], "the sent question moves to Sent");
+assert.equal(clickCtx.youCount({ ...olderGroups, ...after }), 3, "the count drops by one on send");
+
 const reloaded = {};
 vm.createContext(reloaded);
 reloaded.localStorage = clickCtx.localStorage;
+reloaded.Date = Date;
 vm.runInContext(
-  `${extract("boardSentId")}\n${extract("boardQuestionOffered")}\n`,
+  `${extract("boardSentRecord")}\n${extract("boardQuestionOffered")}\n${extract("boardSentText")}\n${extract("fmtTime")}\n`,
   reloaded);
 assert.equal(reloaded.boardQuestionOffered(q), false);
+const rec = reloaded.boardSentRecord(q.id);
+assert.equal(rec.id, 42, "the message id is kept (title attribute)");
+assert.equal(rec.label, "Ship");
+assert.match(reloaded.boardSentText(rec), /^Sent: Ship · \d+s ago$/, "after a reload the row still shows the label + relative time");
+reloaded.localStorage.setItem("mes.boardSent", JSON.stringify({ "obl-legacy": 4343 }));
+assert.equal(JSON.stringify(reloaded.boardSentRecord("obl-legacy")), '{"id":4343}', "a pre-#1007 bare id still reads as sent");
+assert.equal(reloaded.boardSentText(reloaded.boardSentRecord("obl-legacy")), "Sent");
 
 clickCtx.calls = [];
 clickCtx.fetch = async (url, opts) => {
@@ -209,7 +237,7 @@ clickCtx.fetch = async () => ({ ok: true, status: 200, statusText: "OK", json: a
 clickCtx.localStorage.setItem = () => { throw new Error("quota"); };
 await clickCtx.deliverBoardDecision(button3, { id: "obl-3", title: "Ship?", to_node: "science-claude" }, "yes");
 assert.equal(button3.disabled, true);
-assert.equal(button3.textContent, "sent 7");
+assert.match(button3.textContent, /^Sent: · \d+s ago$|^Sent · \d+s ago$/);
 
 assert.equal(clickCtx.clampPollSeconds("0"), 10);
 assert.equal(clickCtx.clampPollSeconds("3"), 10);
