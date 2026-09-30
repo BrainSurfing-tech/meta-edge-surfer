@@ -29,11 +29,19 @@ const KIND_LABELS = ["fyi", "answer", "question", "status", "unblock"];
 // shared-token use stays byte-identical.
 function selfNode() { return ssoActive ? (state.ssoNode || "") : (state.ssoNode || COMMANDER); }
 
+// Same bounds as Settings. A stored 0 is out of range and comes up as 10,
+// not as the blank-field default of 30.
+function clampPollSeconds(raw) {
+  const n = parseInt(raw, 10);
+  if (!isFinite(n)) return 30;
+  return Math.max(10, Math.min(600, n));
+}
+
 // ---------- state ----------
 const state = {
   base: localStorage.getItem(LS.base) || DEFAULT_BASE,
   token: localStorage.getItem(LS.token) || "",
-  pollSec: parseInt(localStorage.getItem(LS.poll) || "30", 10),
+  pollSec: clampPollSeconds(localStorage.getItem(LS.poll) || "30"),
   pollTimer: null,
   peers: [],          // populated after first /peers fetch
   inbox: [],          // most recent first
@@ -409,6 +417,42 @@ function dedupeYou(groups, board) {
   };
 }
 
+function boardSentId(questionId) {
+  if (questionId == null) return null;
+  try {
+    const raw = localStorage.getItem("mes.boardSent");
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+    const key = String(questionId);
+    if (!Object.prototype.hasOwnProperty.call(parsed, key)) return null;
+    return parsed[key];
+  } catch (e) {
+    return null;
+  }
+}
+
+function rememberBoardSent(questionId, messageId) {
+  if (questionId == null) return;
+  try {
+    const raw = localStorage.getItem("mes.boardSent");
+    let cur = {};
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") cur = parsed;
+    }
+    cur[String(questionId)] = messageId;
+    localStorage.setItem("mes.boardSent", JSON.stringify(cur));
+  } catch (e) {
+    // A blocked store must not fail the send. The button stays on "sent".
+  }
+}
+
+function boardQuestionOffered(question) {
+  if (!question || question.in_session) return false;
+  return boardSentId(question.id) == null;
+}
+
 function questionSendControl(question, sessionName) {
   if (question && question.in_session) {
     return { send: false, note: "Answer in " + sessionName };
@@ -425,6 +469,26 @@ function questionSendControl(question, sessionName) {
 
 function sendBoardDecision(question, reply) {
   return apiSend(question.to_node, "answer", "Re: " + question.title + "\n" + reply, ["lab-ovh"]);
+}
+
+async function deliverBoardDecision(button, question, reply) {
+  if (!button || button.disabled) return;
+  button.disabled = true;
+  const err = button.parentElement && button.parentElement.querySelector
+    ? button.parentElement.querySelector(".board-send-err")
+    : null;
+  if (err) err.textContent = "";
+  try {
+    const r = await sendBoardDecision(question, reply);
+    const id = r && r.id != null ? r.id : "";
+    button.textContent = "sent " + id;
+    rememberBoardSent(question && question.id, id);
+  } catch (e) {
+    button.disabled = false;
+    const msg = e && e.message ? e.message : String(e);
+    if (err) err.textContent = msg;
+    else if (typeof setStatus === "function") setStatus("send: " + msg, "err");
+  }
 }
 
 function _whereText(where) {
@@ -474,7 +538,13 @@ function _boardQuestion(question, sessionName) {
   wrap.appendChild(title);
   const ctrl = questionSendControl(question, sessionName);
   const options = question.options || [];
-  if (!question.in_session) {
+  if (!question.in_session && !boardQuestionOffered(question)) {
+    const done = document.createElement("button");
+    done.type = "button";
+    done.disabled = true;
+    done.textContent = "sent " + boardSentId(question.id);
+    wrap.appendChild(done);
+  } else if (!question.in_session) {
     options.forEach((opt, i) => {
       const label = document.createElement("label");
       const radio = document.createElement("input");
@@ -498,8 +568,11 @@ function _boardQuestion(question, sessionName) {
     btn.type = "button";
     btn.className = "btn-primary";
     btn.textContent = "Send decision";
+    const err = document.createElement("p");
+    err.className = "board-send-err";
+    wrap.appendChild(err);
     btn.addEventListener("click", () => {
-      sendBoardDecision(question, box.value).catch((e) => setStatus("send: " + e.message, "err"));
+      deliverBoardDecision(btn, question, box.value);
     });
     wrap.appendChild(btn);
   } else {
@@ -1112,7 +1185,7 @@ function saveSettings(ev) {
   ev.preventDefault();
   state.base = $("#cfg-base").value.replace(/\s+/g, "").replace(/\/$/, "");
   state.token = $("#cfg-token").value.replace(/\s+/g, "");
-  state.pollSec = Math.max(10, Math.min(600, parseInt($("#cfg-poll").value, 10) || 30));
+  state.pollSec = clampPollSeconds($("#cfg-poll").value);
   localStorage.setItem(LS.base, state.base);
   localStorage.setItem(LS.token, state.token);
   localStorage.setItem(LS.poll, String(state.pollSec));
