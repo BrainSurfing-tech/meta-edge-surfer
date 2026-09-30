@@ -358,16 +358,23 @@ function showView(name) {
 // ---------- actions (what is waiting on the commander) ----------
 // Answers ONE question: what can the mesh not proceed without me?
 // Deliberately NOT a status board. Cells handle their own work; this shows only
-// items whose resolution requires this human, ordered by what blocks hardest.
+// items whose resolution requires this human, as ONE list ordered by urgency.
+// `count: false` groups are shown but stay out of the badge: an in-session
+// question is answered elsewhere and a sent decision is already done (#1007).
+// `collapsed` groups fold by default so a phone shows every decision above
+// the fold and the rest as one-tap headers with counts.
 const ACTION_GROUPS = [
-  { key: "questions", label: "Questions waiting on you",  hint: "unanswered DMs addressed to you" },
-  { key: "overdue",   label: "Overdue",                   hint: "past their due date" },
-  { key: "ready",     label: "Ready to advance",          hint: "flagged move_ready, waiting on a call" },
-  { key: "assigned",  label: "Assigned to you",           hint: "carded to you, still open" },
+  { key: "overdue",   label: "Overdue",                  count: true,  hint: "past their due date" },
+  { key: "decidable", label: "Your call",                count: true,  hint: "pick an option and send" },
+  { key: "questions", label: "Questions waiting on you", count: true,  hint: "unanswered DMs addressed to you" },
+  { key: "ready",     label: "Ready to advance",         count: true,  hint: "flagged move_ready, waiting on a call", collapsed: true },
+  { key: "assigned",  label: "Assigned to you",          count: true,  hint: "carded to you, still open", collapsed: true },
+  { key: "inSession", label: "Answer in session",        count: false, hint: "the cell holds the question in its own session", collapsed: true },
+  { key: "sent",      label: "Sent",                     count: false, hint: "decisions already delivered", collapsed: true },
 ];
 
-// A card is DONE-ish and should never nag. Kept as one list so the four
-// groups below cannot drift apart on what "still open" means.
+// A card is DONE-ish and should never nag. Kept as one list so the card
+// groups cannot drift apart on what "still open" means.
 const _CLOSED_STAGES = new Set(["done", "parked"]);
 
 function boardEnvelope(text) {
@@ -417,22 +424,24 @@ function dedupeYou(groups, board) {
   };
 }
 
-function boardSentId(questionId) {
+// mes.boardSent: { [questionId]: { id, label, at } }. An entry written before
+// #1007 is a bare message id; it reads back as { id } (no label, no time).
+function boardSentRecord(questionId) {
   if (questionId == null) return null;
   try {
-    const raw = localStorage.getItem("mes.boardSent");
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
+    const parsed = JSON.parse(localStorage.getItem("mes.boardSent") || "null");
     if (!parsed || typeof parsed !== "object") return null;
     const key = String(questionId);
     if (!Object.prototype.hasOwnProperty.call(parsed, key)) return null;
-    return parsed[key];
+    const v = parsed[key];
+    if (v == null) return null;
+    return typeof v === "object" ? v : { id: v };
   } catch (e) {
     return null;
   }
 }
 
-function rememberBoardSent(questionId, messageId) {
+function rememberBoardSent(questionId, record) {
   if (questionId == null) return;
   try {
     const raw = localStorage.getItem("mes.boardSent");
@@ -441,16 +450,22 @@ function rememberBoardSent(questionId, messageId) {
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed === "object") cur = parsed;
     }
-    cur[String(questionId)] = messageId;
+    cur[String(questionId)] = record;
     localStorage.setItem("mes.boardSent", JSON.stringify(cur));
   } catch (e) {
-    // A blocked store must not fail the send. The button stays on "sent".
+    // A blocked store must not fail the send. The button stays on "Sent".
   }
 }
 
 function boardQuestionOffered(question) {
   if (!question || question.in_session) return false;
-  return boardSentId(question.id) == null;
+  return boardSentRecord(question.id) == null;
+}
+
+// "Sent: Ship · 4m ago" — the decision, not the message id (that goes in a title).
+function boardSentText(rec) {
+  return (rec && rec.label ? "Sent: " + rec.label : "Sent")
+    + (rec && rec.at ? " · " + fmtTime(rec.at) : "");
 }
 
 function questionSendControl(question, sessionName) {
@@ -467,11 +482,34 @@ function questionSendControl(question, sessionName) {
   };
 }
 
+// Flatten the board into the three buckets the list renders, deduped by
+// question id. Only `decidable` counts toward the badge.
+function boardBuckets(board) {
+  const out = { decidable: [], inSession: [], sent: [] };
+  const seen = new Set();
+  for (const sess of (board && board.sessions) || []) {
+    for (const q of sess.questions || []) {
+      const key = q.id != null ? String(q.id) : `${sess.name}:${q.title}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const item = { q, sess };
+      if (q.in_session) out.inSession.push(item);
+      else if (boardQuestionOffered(q)) out.decidable.push(item);
+      else out.sent.push(item);
+    }
+  }
+  return out;
+}
+
+function youCount(groups) {
+  return ACTION_GROUPS.reduce((n, g) => n + (g.count ? (groups[g.key] || []).length : 0), 0);
+}
+
 function sendBoardDecision(question, reply) {
   return apiSend(question.to_node, "answer", "Re: " + question.title + "\n" + reply, ["lab-ovh"]);
 }
 
-async function deliverBoardDecision(button, question, reply) {
+async function deliverBoardDecision(button, question, reply, label) {
   if (!button || button.disabled) return;
   button.disabled = true;
   const err = button.parentElement && button.parentElement.querySelector
@@ -481,8 +519,11 @@ async function deliverBoardDecision(button, question, reply) {
   try {
     const r = await sendBoardDecision(question, reply);
     const id = r && r.id != null ? r.id : "";
-    button.textContent = "sent " + id;
-    rememberBoardSent(question && question.id, id);
+    const rec = { id, label: label || "", at: new Date().toISOString() };
+    rememberBoardSent(question && question.id, rec);
+    button.textContent = boardSentText(rec);
+    // Re-render from the cached fetch: the row moves to Sent, the count drops.
+    if (typeof renderYou === "function") renderYou();
   } catch (e) {
     button.disabled = false;
     const msg = e && e.message ? e.message : String(e);
@@ -491,96 +532,80 @@ async function deliverBoardDecision(button, question, reply) {
   }
 }
 
-function _whereText(where) {
-  if (Array.isArray(where)) return where.filter(Boolean).join("\n");
-  return where || "";
+// Cell name as an eyebrow; its state + where lines stay folded until tapped.
+function _cellEyebrow(question, sess) {
+  const det = document.createElement("details");
+  det.className = "board-cell";
+  const sum = document.createElement("summary");
+  sum.className = "eyebrow";
+  sum.textContent = (sess.name || "cell") + (question.card != null ? ` · card #${question.card}` : "");
+  det.appendChild(sum);
+  const where = document.createElement("p");
+  where.className = "muted board-where";
+  where.textContent = [sess.state].concat(Array.isArray(sess.where) ? sess.where : [sess.where])
+    .filter(Boolean).join("\n");
+  det.appendChild(where);
+  return det;
 }
 
-function renderBoard(board) {
-  const root = $("#board-sections");
-  if (!root) return 0;
-  root.replaceChildren();
-  if (!board) return 0;
-  let n = 0;
-  const seen = new Set();
-  for (const sess of board.sessions || []) {
-    const sec = document.createElement("section");
-    sec.className = "action-group";
-    const h = document.createElement("h3");
-    h.textContent = sess.name || "cell";
-    sec.appendChild(h);
-    const stateEl = document.createElement("p");
-    stateEl.className = "action-primary";
-    stateEl.textContent = sess.state || "";
-    sec.appendChild(stateEl);
-    const where = document.createElement("p");
-    where.className = "muted board-where";
-    where.textContent = _whereText(sess.where);
-    sec.appendChild(where);
-    for (const q of sess.questions || []) {
-      const key = q.id != null ? String(q.id) : `${sess.name}:${q.title}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      n += 1;
-      sec.appendChild(_boardQuestion(q, sess.name || ""));
-    }
-    root.appendChild(sec);
-  }
-  return n;
-}
-
-function _boardQuestion(question, sessionName) {
-  const wrap = document.createElement("div");
-  wrap.className = "board-q";
+function _boardQuestion(question, sess) {
+  const li = document.createElement("li");
+  li.className = "action-row board-q";
+  li.appendChild(_cellEyebrow(question, sess));
   const title = document.createElement("div");
   title.className = "action-primary";
   title.textContent = question.title || "";
-  wrap.appendChild(title);
-  const ctrl = questionSendControl(question, sessionName);
+  li.appendChild(title);
+
   const options = question.options || [];
-  if (!question.in_session && !boardQuestionOffered(question)) {
-    const done = document.createElement("button");
-    done.type = "button";
-    done.disabled = true;
-    done.textContent = "sent " + boardSentId(question.id);
-    wrap.appendChild(done);
-  } else if (!question.in_session) {
-    options.forEach((opt, i) => {
-      const label = document.createElement("label");
-      const radio = document.createElement("input");
-      radio.type = "radio";
-      radio.name = `board-q-${question.id}`;
-      radio.checked = !!opt.rec || (!options.some((o) => o.rec) && i === 0);
-      radio.addEventListener("change", () => {
-        const box = wrap.querySelector("textarea");
-        if (box) box.value = opt.text || "";
-      });
-      label.appendChild(radio);
-      label.appendChild(document.createTextNode(" " + (opt.label || "")));
-      wrap.appendChild(label);
-    });
-    const box = document.createElement("textarea");
-    box.className = "reply";
-    box.rows = 3;
-    box.value = ctrl.reply || "";
-    wrap.appendChild(box);
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "btn-primary";
-    btn.textContent = "Send decision";
-    const err = document.createElement("p");
-    err.className = "board-send-err";
-    wrap.appendChild(err);
-    btn.addEventListener("click", () => {
-      deliverBoardDecision(btn, question, box.value);
-    });
-    wrap.appendChild(btn);
-  } else {
-    const note = document.createElement("p");
-    note.textContent = ctrl.note;
-    wrap.appendChild(note);
-  }
-  return wrap;
+  options.forEach((opt, i) => {
+    const label = document.createElement("label");
+    label.className = "board-opt";
+    const radio = document.createElement("input");
+    radio.type = "radio";
+    radio.name = `board-q-${question.id}`;
+    radio.value = String(i);
+    radio.checked = !!opt.rec || (!options.some((o) => o.rec) && i === 0);
+    const text = document.createElement("span");
+    text.textContent = opt.label || "";
+    label.append(radio, text);
+    li.appendChild(label);
+  });
+
+  // The note is opt-in: by default the reply IS the option text.
+  const box = document.createElement("textarea");
+  box.className = "reply hidden";
+  box.rows = 2;
+  box.placeholder = "Optional note, sent under the option text";
+  li.appendChild(box);
+
+  const act = document.createElement("div");
+  act.className = "board-act";
+  const noteBtn = document.createElement("button");
+  noteBtn.type = "button";
+  noteBtn.className = "btn-link";
+  noteBtn.textContent = "Add a note";
+  noteBtn.addEventListener("click", () => {
+    const hidden = box.classList.toggle("hidden");
+    noteBtn.textContent = hidden ? "Add a note" : "Hide note";
+    if (!hidden) box.focus();
+  });
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "btn-primary";
+  btn.textContent = "Send decision";
+  btn.addEventListener("click", () => {
+    const picked = li.querySelector("input:checked");
+    const opt = (picked && options[+picked.value]) || {};
+    const note = box.value.trim();
+    deliverBoardDecision(btn, question,
+      (opt.text || opt.label || "") + (note ? "\n" + note : ""), opt.label || "");
+  });
+  const err = document.createElement("p");
+  err.className = "board-send-err";
+  act.append(noteBtn, btn, err);
+  li.appendChild(act);
+  return li;
 }
 
 function toggleNav(force) {
@@ -592,7 +617,17 @@ function toggleNav(force) {
   btn.setAttribute("aria-expanded", open ? "true" : "false");
 }
 
-async function refreshActions() {
+// The last fetch, kept so a send can re-render without a round trip, and its
+// raw shape: the poll re-renders only when the data changed, so a half-typed
+// note, a picked option or an opened fold survives the 30 s tick.
+let _you = null;
+let _youSig = null;
+function renderYou() {
+  if (!_you) return;
+  renderActions({ ..._you.grouped, ...boardBuckets(_you.board) });
+}
+
+async function refreshActions(force = false) {
   const me = selfNode();
   try {
     setStatus("loading actions…");
@@ -600,6 +635,9 @@ async function refreshActions() {
       api(`/messages?to_node=${encodeURIComponent(me)}&limit=200`),
       api(`/board/cards?limit=500`),
     ]);
+    const sig = JSON.stringify([msgRes, cardRes]);
+    if (!force && sig === _youSig) { setStatus(""); return; }
+    _youSig = sig;
     const msgs  = msgRes.messages || [];
     const cards = cardRes.cards || [];
 
@@ -618,9 +656,8 @@ async function refreshActions() {
 
     const boardMsg = newestBoardDm(msgs);
     const board = boardMsg ? parseBoardDm(boardMsg.content) : null;
-    const grouped = dedupeYou({ questions, overdue, ready, assigned }, board);
-    const boardCount = renderBoard(board);
-    renderActions(grouped, boardCount);
+    _you = { grouped: dedupeYou({ questions, overdue, ready, assigned }, board), board };
+    renderYou();
     setStatus("");
   } catch (e) {
     setStatus("actions: " + e.message, "err");
@@ -649,8 +686,27 @@ function _actionRow(primary, secondary, when) {
   return li;
 }
 
-function renderActions(groups, extra = 0) {
-  const total = extra + ACTION_GROUPS.reduce((n, g) => n + (groups[g.key] || []).length, 0);
+function _youRow(key, it) {
+  if (key === "decidable") return _boardQuestion(it.q, it.sess);
+  if (key === "inSession") {
+    return _actionRow(it.q.title, `${it.sess.name} · ${questionSendControl(it.q, it.sess.name).note}`);
+  }
+  if (key === "sent") {
+    const rec = boardSentRecord(it.q.id) || {};
+    const li = _actionRow(it.q.title, `${boardSentText(rec)} · ${it.sess.name}`);
+    li.title = `message #${rec.id}`;
+    return li;
+  }
+  if (it.kind === "question") {
+    return _actionRow(it.content || "", `from ${it.from_node} · #${it.id}`, it.created_at);
+  }
+  const meta = [it.stage, it.assignee ? `@${it.assignee}` : null,
+                it.priority != null ? `p${it.priority}` : null].filter(Boolean).join(" · ");
+  return _actionRow(`#${it.id} ${it.title || ""}`, meta, it.due_at || it.updated_at);
+}
+
+function renderActions(groups) {
+  const total = youCount(groups);
 
   const badge = $("#actions-badge");
   if (badge) {
@@ -661,14 +717,17 @@ function renderActions(groups, extra = 0) {
   $("#actions-empty").classList.toggle("hidden", total > 0);
 
   const root = $("#actions-groups");
+  const wasOpen = new Set($$("details.action-group[open]", root).map((d) => d.dataset.key));
   root.replaceChildren();
 
   ACTION_GROUPS.forEach((g) => {
     const items = groups[g.key] || [];
     if (!items.length) return;
 
-    const sec = document.createElement("section");
-    sec.className = "action-group";
+    const sec = document.createElement(g.collapsed ? "details" : "section");
+    sec.className = "action-group" + (g.count ? "" : " quiet");
+    sec.dataset.key = g.key;
+    if (g.collapsed && wasOpen.has(g.key)) sec.open = true;
 
     const h = document.createElement("h3");
     h.append(document.createTextNode(g.label + " "));
@@ -676,24 +735,24 @@ function renderActions(groups, extra = 0) {
     cnt.className = "count";
     cnt.textContent = String(items.length);
     h.appendChild(cnt);
-    sec.appendChild(h);
+    if (g.collapsed) {
+      const sum = document.createElement("summary");
+      sum.appendChild(h);
+      sec.appendChild(sum);
+    } else {
+      sec.appendChild(h);
+    }
 
-    const hint = document.createElement("p");
-    hint.className = "muted action-hint";
-    hint.textContent = g.hint;
-    sec.appendChild(hint);
+    if (g.hint) {
+      const hint = document.createElement("p");
+      hint.className = "muted action-hint";
+      hint.textContent = g.hint;
+      sec.appendChild(hint);
+    }
 
     const ul = document.createElement("ul");
     ul.className = "action-list";
-    items.forEach((it) => {
-      if (it.kind === "question") {
-        ul.appendChild(_actionRow(it.content || "", `from ${it.from_node} · #${it.id}`, it.created_at));
-      } else {
-        const meta = [it.stage, it.assignee ? `@${it.assignee}` : null,
-                      it.priority != null ? `p${it.priority}` : null].filter(Boolean).join(" · ");
-        ul.appendChild(_actionRow(`#${it.id} ${it.title || ""}`, meta, it.due_at || it.updated_at));
-      }
-    });
+    items.forEach((it) => ul.appendChild(_youRow(g.key, it)));
     sec.appendChild(ul);
     root.appendChild(sec);
   });
@@ -1290,6 +1349,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     toggleNav(false);
   }));
   $("#refresh-inbox").addEventListener("click", refreshInbox);
+  $("#refresh-actions")?.addEventListener("click", () => refreshActions(true));
   $("#read-send")?.addEventListener("click", sendToRead);
   $("#read-refresh")?.addEventListener("click", loadReadQueue);
   $("#refresh-highlights").addEventListener("click", refreshHighlights);
