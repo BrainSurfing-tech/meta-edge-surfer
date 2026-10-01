@@ -1608,6 +1608,18 @@ const apiToolsSay = (channel, content) =>
     body: JSON.stringify({ from_node: selfNode(), channel, kind: "fyi", content }),
   });
 // Schedule is read-only here (phase 1): reuse the automations helper.
+// Gateway thread envelope is {card_id, thread_uuid, messages:[...]} — the
+// same 'messages' key swarph-me's formatter reads (operator/fmt.py _rows).
+function toolsThreadPosts(thread) {
+  if (Array.isArray(thread)) return thread;
+  const t = thread || {};
+  return t.messages || t.posts || t.thread || [];
+}
+// swarph-me's default `cards` verb (mode cards-ready, fmt.py) keeps only
+// move_ready rows client-side. An explicit stage/assignee filter lists all.
+function toolsReadyRows(cards) {
+  return (cards || []).filter((c) => c && c.move_ready);
+}
 // ---------- end tools (card #1018) ----------
 
 // ---------- tools UI (card #1018) ----------
@@ -1652,7 +1664,8 @@ async function refreshToolsCards() {
   const assignee = $("#tools-assignee").value.trim();
   const filter = stage ? { stage } : (assignee ? { assignee } : undefined);
   const res = await apiToolsCards(filter);
-  const cards = Array.isArray(res) ? res : (res.cards || []);
+  let cards = Array.isArray(res) ? res : (res.cards || []);
+  if (!filter) cards = toolsReadyRows(cards);
   const list = $("#tools-cards");
   list.innerHTML = "";
   for (const c of cards) {
@@ -1681,7 +1694,7 @@ async function openToolsCard(id) {
       p.textContent = card.body;
       detail.append(p);
     }
-    const posts = Array.isArray(thread) ? thread : (thread.posts || thread.thread || []);
+    const posts = toolsThreadPosts(thread);
     if (posts.length) {
       const ul = document.createElement("ul");
       ul.className = "msg-list";

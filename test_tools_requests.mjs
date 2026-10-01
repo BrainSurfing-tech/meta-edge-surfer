@@ -126,4 +126,28 @@ const uiSection = src.slice(src.indexOf(END));
 const confirms = (uiSection.match(/if\s*\(\s*!confirm\(/g) || []).length;
 assert.equal(confirms, 9, `expected 9 confirm guards in tools UI, got ${confirms}`);
 
+// ---- #974: gateway thread shape {card_id, thread_uuid, messages:[...]} ----
+function extract2(name) {
+  const start = src.indexOf(`function ${name}(`);
+  assert.ok(start >= 0, `${name}() not found`);
+  const open = src.indexOf("{", start);
+  let depth = 0, end = -1;
+  for (let i = open; i < src.length; i++) {
+    if (src[i] === "{") depth++;
+    else if (src[i] === "}") { depth--; if (depth === 0) { end = i + 1; break; } }
+  }
+  return src.slice(start, end);
+}
+vm.runInContext(`${extract2("toolsThreadPosts")}\n${extract2("toolsReadyRows")}`, ctx);
+const posts = ctx.toolsThreadPosts({ card_id: 1006, thread_uuid: "thread-1006",
+  messages: [{ content: "one" }, { content: "two" }] });
+assert.equal(posts.length, 2, "gateway {messages:[...]} shape must render 2 posts");
+assert.equal(ctx.toolsThreadPosts({ posts: [{ content: "x" }] }).length, 1,
+  "legacy {posts:[...]} keeps working");
+assert.equal(ctx.toolsThreadPosts([{ content: "y" }]).length, 1, "bare array keeps working");
+// ---- #974: default ready list keeps only move_ready rows (fmt.py cards-ready) ----
+const ready = ctx.toolsReadyRows(
+  [{ id: 1, move_ready: true }, { id: 2, move_ready: false }, { id: 3 }]);
+assert.deepEqual(ready.map((c) => c.id), [1], "default list shows only move_ready cards");
+
 console.log("tools request-shape tests: all passed");
