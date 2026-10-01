@@ -352,6 +352,7 @@ function showView(name) {
   if (name === "automations") refreshAutomations();
   if (name === "services") { refreshServices(); refreshLanes(); }
   if (name === "read") loadReadQueue();
+  if (name === "tools") refreshTools();
   if (name === "settings") populateSettings();
 }
 
@@ -1383,6 +1384,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("#read-refresh")?.addEventListener("click", loadReadQueue);
   $("#refresh-highlights").addEventListener("click", refreshHighlights);
   $("#refresh-services").addEventListener("click", refreshServices);
+  wireTools();
   $("#new-lane-btn").addEventListener("click", () => $("#new-lane-form").classList.toggle("hidden"));
   $("#new-lane-form").addEventListener("submit", createLaneFromForm);
   $("#send-form").addEventListener("submit", handleSend);
@@ -1549,4 +1551,376 @@ async function sendToRead() {
   } finally {
     btn.disabled = false;
   }
+}
+
+// ---------- tools (card #1018) ----------
+// Operator verbs (swarph-me) on the phone: Cards / Channels / Schedule.
+// Every call goes through api() — the same gateway routes swarph-me uses,
+// one request per act. Every write confirm()s first.
+const apiToolsCards = (filter) => {
+  if (filter && filter.stage) {
+    return api(`/board/cards?stage=${encodeURIComponent(filter.stage)}`);
+  }
+  if (filter && filter.assignee) {
+    return api(`/board/cards?assignee=${encodeURIComponent(filter.assignee)}`);
+  }
+  return api("/board/cards");
+};
+const apiToolsCard = (id) => api(`/board/cards/${encodeURIComponent(id)}`);
+const apiToolsThread = (id, limit = 15) =>
+  api(`/board/cards/${encodeURIComponent(id)}/thread?limit=${limit}`);
+const apiToolsCardPatch = (id, fields) =>
+  api(`/board/cards/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ actor: selfNode(), ...fields }),
+  });
+const apiToolsMove = (id, stage) => apiToolsCardPatch(id, { stage });
+const apiToolsAssign = (id, peer) => apiToolsCardPatch(id, { assignee: peer });
+const apiToolsReady = (id, flag = true) => apiToolsCardPatch(id, { move_ready: flag });
+const apiToolsDue = (id, due_at) => apiToolsCardPatch(id, { due_at });
+// Comment = exactly ONE request: the card is already open, so thread_uuid
+// and assignee come from the cached card, the way swarph-me cardsay reads
+// the card before posting.
+const apiToolsComment = (card, content) =>
+  api("/messages", {
+    method: "POST",
+    body: JSON.stringify({
+      from_node: selfNode(), to_node: card.assignee, kind: "status",
+      content, thread_uuid: card.thread_uuid,
+    }),
+  });
+const apiToolsChannels = () => api("/channels");
+const apiToolsJoin = (channel, wake_policy = "all") =>
+  api(`/channels/${encodeURIComponent(channel)}/join`, {
+    method: "POST",
+    body: JSON.stringify({ peer: selfNode(), wake_policy }),
+  });
+const apiToolsLeave = (channel) =>
+  api(`/channels/${encodeURIComponent(channel)}/leave`, {
+    method: "POST",
+    body: JSON.stringify({ peer: selfNode() }),
+  });
+const apiToolsChannelRead = (channel, limit = 15) =>
+  api(`/messages?channel=${encodeURIComponent(channel)}&limit=${limit}`);
+const apiToolsSay = (channel, content) =>
+  api("/messages", {
+    method: "POST",
+    body: JSON.stringify({ from_node: selfNode(), channel, kind: "fyi", content }),
+  });
+// Schedule is read-only here (phase 1): reuse the automations helper.
+// ---------- end tools (card #1018) ----------
+
+// ---------- tools UI (card #1018) ----------
+// One action per row; every write confirm()s, sends one request, refreshes.
+const TOOLS_STAGES = ["build", "test", "proposed", "plan", "spec", "idea", "parked", "done"];
+let toolsOpenCard = null;
+let toolsOpenChannel = null;
+
+function toolsRow(label, meta) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "tools-row";
+  const t = document.createElement("span");
+  t.className = "tools-title";
+  t.textContent = label;
+  b.append(t);
+  if (meta) {
+    const m = document.createElement("span");
+    m.className = "muted";
+    m.textContent = meta;
+    b.append(m);
+  }
+  return b;
+}
+
+function toolsActRow() {
+  const d = document.createElement("div");
+  d.className = "tools-act";
+  return d;
+}
+
+async function refreshTools() {
+  setStatus("tools…");
+  try {
+    await Promise.all([refreshToolsCards(), refreshToolsChannels(), refreshToolsSched()]);
+    setStatus("tools ✓", "ok");
+  } catch (e) { setStatus("tools: " + e.message, "err"); }
+}
+
+async function refreshToolsCards() {
+  const stage = $("#tools-stage").value;
+  const assignee = $("#tools-assignee").value.trim();
+  const filter = stage ? { stage } : (assignee ? { assignee } : undefined);
+  const res = await apiToolsCards(filter);
+  const cards = Array.isArray(res) ? res : (res.cards || []);
+  const list = $("#tools-cards");
+  list.innerHTML = "";
+  for (const c of cards) {
+    const b = toolsRow(`#${c.id} ${c.title || ""}`,
+      `${c.stage || ""}${c.assignee ? " · @" + c.assignee : ""}${c.due_at ? " · due " + c.due_at.slice(0, 10) : ""}`);
+    b.onclick = () => openToolsCard(c.id);
+    const li = document.createElement("li");
+    li.append(b);
+    list.append(li);
+  }
+  $("#tools-meta").textContent = `${cards.length} card${cards.length === 1 ? "" : "s"}`;
+}
+
+async function openToolsCard(id) {
+  const detail = $("#tools-card-detail");
+  detail.innerHTML = "";
+  try {
+    const card = await apiToolsCard(id);
+    const thread = await apiToolsThread(id, 15).catch(() => []);
+    toolsOpenCard = card;
+    const h = document.createElement("h4");
+    h.textContent = `#${card.id} ${card.title || ""}`;
+    detail.append(h);
+    if (card.body) {
+      const p = document.createElement("p");
+      p.textContent = card.body;
+      detail.append(p);
+    }
+    const posts = Array.isArray(thread) ? thread : (thread.posts || thread.thread || []);
+    if (posts.length) {
+      const ul = document.createElement("ul");
+      ul.className = "msg-list";
+      for (const m of posts.slice(-15)) {
+        const li = document.createElement("li");
+        li.className = "muted";
+        li.textContent = `${m.from_node || m.from || "?"}: ${(m.content || "").slice(0, 280)}`;
+        ul.append(li);
+      }
+      detail.append(ul);
+    }
+    // Move — one PATCH.
+    {
+      const row = toolsActRow();
+      const sel = document.createElement("select");
+      sel.setAttribute("aria-label", "New stage");
+      for (const s of TOOLS_STAGES) {
+        const o = document.createElement("option");
+        o.value = s; o.textContent = s; if (s === card.stage) o.selected = true;
+        sel.append(o);
+      }
+      const go = document.createElement("button");
+      go.type = "button"; go.className = "btn-secondary"; go.textContent = "Move";
+      go.onclick = async () => {
+        if (!confirm(`move #${card.id} to ${sel.value}?`)) return;
+        try {
+          await apiToolsMove(card.id, sel.value);
+          setStatus(`moved #${card.id} ✓`, "ok");
+          openToolsCard(card.id); refreshToolsCards();
+        } catch (e) { setStatus(`move: ${e.message}`, "err"); }
+      };
+      row.append(sel, go);
+      detail.append(row);
+    }
+    // Assign — one PATCH.
+    {
+      const row = toolsActRow();
+      const inp = document.createElement("input");
+      inp.type = "text"; inp.placeholder = "peer"; inp.value = card.assignee || "";
+      inp.setAttribute("aria-label", "Assignee");
+      const go = document.createElement("button");
+      go.type = "button"; go.className = "btn-secondary"; go.textContent = "Assign";
+      go.onclick = async () => {
+        const peer = inp.value.trim();
+        if (!peer) { setStatus("assign: give a peer", "err"); return; }
+        if (!confirm(`assign #${card.id} to ${peer}?`)) return;
+        try {
+          await apiToolsAssign(card.id, peer);
+          setStatus(`assigned #${card.id} ✓`, "ok");
+          openToolsCard(card.id); refreshToolsCards();
+        } catch (e) { setStatus(`assign: ${e.message}`, "err"); }
+      };
+      row.append(inp, go);
+      detail.append(row);
+    }
+    // Ready toggle — one PATCH.
+    {
+      const row = toolsActRow();
+      const go = document.createElement("button");
+      go.type = "button"; go.className = "btn-secondary";
+      go.textContent = card.move_ready ? "Clear ready" : "Mark ready";
+      go.onclick = async () => {
+        if (!confirm(`${card.move_ready ? "clear ready on" : "mark ready"} #${card.id}?`)) return;
+        try {
+          await apiToolsReady(card.id, !card.move_ready);
+          setStatus(`ready #${card.id} ✓`, "ok");
+          openToolsCard(card.id); refreshToolsCards();
+        } catch (e) { setStatus(`ready: ${e.message}`, "err"); }
+      };
+      row.append(go);
+      detail.append(row);
+    }
+    // Due set / clear — one PATCH.
+    {
+      const row = toolsActRow();
+      const d = document.createElement("input");
+      d.type = "date"; d.setAttribute("aria-label", "Due date");
+      if (card.due_at) d.value = String(card.due_at).slice(0, 10);
+      const t = document.createElement("input");
+      t.type = "time"; t.value = "14:00"; t.setAttribute("aria-label", "Due time");
+      const go = document.createElement("button");
+      go.type = "button"; go.className = "btn-secondary"; go.textContent = "Set due";
+      go.onclick = async () => {
+        if (!d.value) { setStatus("due: pick a date", "err"); return; }
+        if (!confirm(`set due #${card.id} to ${d.value}?`)) return;
+        try {
+          await apiToolsDue(card.id, `${d.value}T${t.value || "14:00"}:00+00:00`);
+          setStatus(`due #${card.id} ✓`, "ok");
+          openToolsCard(card.id); refreshToolsCards();
+        } catch (e) { setStatus(`due: ${e.message}`, "err"); }
+      };
+      const clear = document.createElement("button");
+      clear.type = "button"; clear.className = "btn-secondary"; clear.textContent = "Clear";
+      clear.onclick = async () => {
+        if (!confirm(`clear due on #${card.id}?`)) return;
+        try {
+          await apiToolsDue(card.id, "");
+          setStatus(`due cleared #${card.id} ✓`, "ok");
+          openToolsCard(card.id); refreshToolsCards();
+        } catch (e) { setStatus(`due: ${e.message}`, "err"); }
+      };
+      row.append(d, t, go, clear);
+      detail.append(row);
+    }
+    // Comment — exactly one POST (thread_uuid + assignee cached from the open).
+    {
+      const row = toolsActRow();
+      if (!card.assignee) {
+        const note = document.createElement("p");
+        note.className = "muted";
+        note.textContent = "Assign the card first — a comment posts to the assignee.";
+        row.append(note);
+      } else {
+        const ta = document.createElement("textarea");
+        ta.rows = 3; ta.placeholder = "Comment…";
+        ta.setAttribute("aria-label", "Comment");
+        const go = document.createElement("button");
+        go.type = "button"; go.className = "btn-primary"; go.textContent = "Post comment";
+        go.onclick = async () => {
+          const content = ta.value.trim();
+          if (!content) { setStatus("comment: write something first", "err"); return; }
+          if (!confirm(`post comment on #${card.id} to @${card.assignee}?`)) return;
+          try {
+            await apiToolsComment(toolsOpenCard, content);
+            setStatus(`comment #${card.id} ✓`, "ok");
+            openToolsCard(card.id);
+          } catch (e) { setStatus(`comment: ${e.message}`, "err"); }
+        };
+        row.append(ta, go);
+      }
+      detail.append(row);
+    }
+  } catch (e) { setStatus("card: " + e.message, "err"); }
+}
+
+async function refreshToolsChannels() {
+  const res = await apiToolsChannels();
+  const channels = Array.isArray(res) ? res : (res.channels || []);
+  const list = $("#tools-channels");
+  list.innerHTML = "";
+  for (const c of channels) {
+    const name = typeof c === "string" ? c : c.name;
+    const b = toolsRow("#" + name, typeof c === "object" && c.members != null ? `${c.members} member(s)` : "");
+    b.onclick = () => openToolsChannel(name);
+    const li = document.createElement("li");
+    li.append(b);
+    list.append(li);
+  }
+}
+
+async function openToolsChannel(name) {
+  toolsOpenChannel = name;
+  const detail = $("#tools-channel-detail");
+  detail.innerHTML = "";
+  const h = document.createElement("h4");
+  h.textContent = "#" + name;
+  detail.append(h);
+  try {
+    const res = await apiToolsChannelRead(name, 15);
+    const posts = Array.isArray(res) ? res : (res.posts || res.messages || []);
+    const ul = document.createElement("ul");
+    ul.className = "msg-list";
+    for (const m of posts.slice(-15)) {
+      const li = document.createElement("li");
+      li.className = "muted";
+      li.textContent = `${m.from_node || m.from || "?"}: ${(m.content || "").slice(0, 280)}`;
+      ul.append(li);
+    }
+    detail.append(ul);
+  } catch (e) { setStatus("channel read: " + e.message, "err"); }
+  // Join / leave — one POST each.
+  {
+    const row = toolsActRow();
+    const join = document.createElement("button");
+    join.type = "button"; join.className = "btn-secondary"; join.textContent = "Join";
+    join.onclick = async () => {
+      if (!confirm(`join #${name}?`)) return;
+      try {
+        await apiToolsJoin(name, "all");
+        setStatus(`joined #${name} ✓`, "ok");
+      } catch (e) { setStatus(`join: ${e.message}`, "err"); }
+    };
+    const leave = document.createElement("button");
+    leave.type = "button"; leave.className = "btn-secondary"; leave.textContent = "Leave";
+    leave.onclick = async () => {
+      if (!confirm(`leave #${name}?`)) return;
+      try {
+        await apiToolsLeave(name);
+        setStatus(`left #${name} ✓`, "ok");
+      } catch (e) { setStatus(`leave: ${e.message}`, "err"); }
+    };
+    row.append(join, leave);
+    detail.append(row);
+  }
+  // Say — one POST.
+  {
+    const row = toolsActRow();
+    const inp = document.createElement("input");
+    inp.type = "text"; inp.placeholder = "Say something…";
+    inp.setAttribute("aria-label", "Message");
+    const go = document.createElement("button");
+    go.type = "button"; go.className = "btn-primary"; go.textContent = "Say";
+    go.onclick = async () => {
+      const content = inp.value.trim();
+      if (!content) return;
+      if (!confirm(`say in #${name}?`)) return;
+      try {
+        await apiToolsSay(name, content);
+        inp.value = "";
+        setStatus(`said in #${name} ✓`, "ok");
+        openToolsChannel(name);
+      } catch (e) { setStatus(`say: ${e.message}`, "err"); }
+    };
+    row.append(inp, go);
+    detail.append(row);
+  }
+}
+
+async function refreshToolsSched() {
+  const res = await apiSchedEvents();
+  const events = Array.isArray(res) ? res : (res.events || []);
+  const list = $("#tools-sched");
+  list.innerHTML = "";
+  for (const ev of events) {
+    const li = document.createElement("li");
+    li.className = "muted";
+    li.textContent = `${ev.name} · ${ev.trigger_type === "time" ? (ev.cron || "") : "event"}` +
+      ` → ${ev.target_cell || ""}${ev.enabled ? "" : " (disabled)"}`;
+    list.append(li);
+  }
+  if (!events.length) {
+    const li = document.createElement("li");
+    li.className = "muted";
+    li.textContent = "No scheduled events.";
+    list.append(li);
+  }
+}
+
+function wireTools() {
+  $("#refresh-tools").addEventListener("click", refreshTools);
+  $("#tools-cards-go").addEventListener("click", refreshToolsCards);
 }
