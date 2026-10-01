@@ -17,7 +17,17 @@ const STATIC_ASSETS = [
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches.open(STATIC_CACHE).then((cache) => cache.addAll(STATIC_ASSETS).catch(() => null))
+    caches
+      .open(STATIC_CACHE)
+      // {cache:"reload"}: precache must bypass the HTTP cache. A plain
+      // addAll consults it, so an app.js pinned stale by a long max-age
+      // would be precached stale and the installed PWA would keep old code
+      // past the version bump (card #1007).
+      .then((cache) =>
+        cache
+          .addAll(STATIC_ASSETS.map((u) => new Request(u, { cache: "reload" })))
+          .catch(() => null),
+      )
   );
   self.skipWaiting();
 });
