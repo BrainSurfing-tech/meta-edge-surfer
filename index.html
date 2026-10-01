@@ -26,6 +26,7 @@
     <button class="tab active" data-view="actions" role="tab">You<span id="actions-badge" class="badge hidden"></span></button>
     <button class="tab" data-view="inbox" role="tab">Inbox</button>
     <button class="tab" data-view="send" role="tab">Send</button>
+    <button class="tab" data-view="tools" role="tab">Tools</button>
     <button class="tab" data-view="highlights" role="tab">48h</button>
     <button class="tab" data-view="automations" role="tab">Automations</button>
     <button class="tab" data-view="services" role="tab">Services</button>
@@ -82,6 +83,37 @@
       <div id="actions-groups"></div>
       <p id="actions-empty" class="empty hidden">Nothing is waiting on you.</p>
       <p class="note">What the mesh cannot proceed without, ordered by what blocks hardest. Everything else the cells handle themselves.</p>
+    </section>
+
+    <section id="view-tools" class="view">
+      <div class="toolbar">
+        <button id="refresh-tools" class="btn-secondary">⟳ Refresh</button>
+        <span id="tools-meta" class="muted"></span>
+      </div>
+      <h3 class="tools-head">Cards</h3>
+      <div class="row tools-filters">
+        <select id="tools-stage" aria-label="Stage filter">
+          <option value="">ready (default)</option>
+          <option value="build">build</option>
+          <option value="test">test</option>
+          <option value="proposed">proposed</option>
+          <option value="plan">plan</option>
+          <option value="spec">spec</option>
+          <option value="idea">idea</option>
+          <option value="parked">parked</option>
+          <option value="done">done</option>
+        </select>
+        <input id="tools-assignee" type="text" autocomplete="off" placeholder="assignee (blank = any)" />
+        <button id="tools-cards-go" class="btn-secondary" type="button">List</button>
+      </div>
+      <ul id="tools-cards" class="msg-list"></ul>
+      <div id="tools-card-detail"></div>
+      <h3 class="tools-head">Channels</h3>
+      <ul id="tools-channels" class="msg-list"></ul>
+      <div id="tools-channel-detail"></div>
+      <h3 class="tools-head">Schedule</h3>
+      <ul id="tools-sched" class="msg-list"></ul>
+      <p class="note">Writes ask for confirm first. Schedule is read-only here.</p>
     </section>
 
     <section id="view-highlights" class="view">

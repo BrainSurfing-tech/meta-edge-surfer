@@ -455,3 +455,28 @@ details.action-group > summary h3 { display: inline-flex; }
   overflow: hidden;
 }
 .action-secondary { font-size: .74rem; margin-top: .2rem; }
+
+/* ---------- tools (card #1018) ---------- */
+/* One action per row; everything tappable at 44px on a 360px phone.
+   Buttons/inputs/selects already carry min-height: var(--tap). */
+.tools-head { margin: .9rem .8rem .3rem; font-size: 1rem; }
+.tools-filters { display: flex; gap: 8px; padding: 0 .8rem; }
+.tools-filters select, .tools-filters input { flex: 1; min-width: 0; }
+.tools-filters .btn-secondary { flex: none; }
+.tools-row {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  width: 100%; min-height: var(--tap); padding: 8px 12px;
+  background: var(--panel-2); color: var(--fg);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  font: inherit; text-align: left; cursor: pointer;
+}
+.tools-title { font-weight: 600; overflow-wrap: anywhere; }
+.tools-act {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  padding: .4rem .8rem;
+}
+.tools-act > * { min-height: var(--tap); }
+.tools-act input, .tools-act select, .tools-act textarea { flex: 1 1 140px; min-width: 0; }
+.tools-act .btn-primary, .tools-act .btn-secondary { flex: none; }
+#tools-card-detail h4, #tools-channel-detail h4 { margin: .7rem .8rem .2rem; }
+#tools-card-detail p { margin: .2rem .8rem; overflow-wrap: anywhere; }
