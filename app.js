@@ -518,7 +518,10 @@ async function deliverBoardDecision(button, question, reply, label) {
     : null;
   if (err) err.textContent = "";
   try {
-    const r = await sendBoardDecision(question, reply);
+    // Sends the DM, and closes the carried obligation when there is one.
+    // A failed close throws: nothing below runs, so a failed close is an
+    // error on the row, never a "sent" report.
+    const { sent: r } = await sendBoardDecisionAndClose(question, reply);
     const id = r && r.id != null ? r.id : "";
     const rec = { id, label: label || "", at: new Date().toISOString() };
     rememberBoardSent(question && question.id, rec);
@@ -1937,3 +1940,35 @@ function wireTools() {
   $("#refresh-tools").addEventListener("click", refreshTools);
   $("#tools-cards-go").addEventListener("click", refreshToolsCards);
 }
+
+// ---------- board close (#983) ----------
+// Answering a board question that carries an obligation id ALSO closes that
+// obligation as the commander — same api() helper, same gateway. The id key
+// is read in exactly one place (boardObligationId) so a rename is one line.
+function boardObligationId(question) {
+  // Key confirmed by lab-ovh (msg 58626) and build_board.py:96-97:
+  // question.obligation is the integer obligation id; question.id is
+  // the string 'obl-<id>'.
+  const raw = question ? question.obligation : null;
+  const n = typeof raw === "number" ? raw : parseInt(raw, 10);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+const apiBoardObligationClose = (id, outcome, evidence) =>
+  api(`/board/obligations/${encodeURIComponent(id)}/close`, {
+    method: "POST",
+    body: JSON.stringify({ outcome, evidence }),
+  });
+// Sends the answer DM, then — only when the question carries an obligation
+// id — closes it with outcome pass and the answer quoted verbatim. Throws on
+// a failed close so the caller reports an error instead of "sent".
+async function sendBoardDecisionAndClose(question, reply) {
+  const sent = await sendBoardDecision(question, reply);
+  const oid = boardObligationId(question);
+  if (oid == null) return { sent, closed: null };
+  const dmId = sent && sent.id != null ? sent.id : "";
+  const evidence =
+    `Board answer sent (DM #${dmId}): Re: ${question.title}\n${reply}`;
+  const closed = await apiBoardObligationClose(oid, "pass", evidence);
+  return { sent, closed };
+}
+// ---------- end board close (#983) ----------
