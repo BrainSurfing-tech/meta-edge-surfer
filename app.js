@@ -521,6 +521,7 @@ async function deliverBoardDecision(button, question, reply, label) {
     const id = r && r.id != null ? r.id : "";
     const rec = { id, label: label || "", at: new Date().toISOString() };
     rememberBoardSent(question && question.id, rec);
+    _boardDrafts.delete(boardDraftKey(question, null));
     button.textContent = boardSentText(rec);
     // Re-render from the cached fetch: the row moves to Sent, the count drops.
     if (typeof renderYou === "function") renderYou();
@@ -548,6 +549,23 @@ function _cellEyebrow(question, sess) {
   return det;
 }
 
+// Drafts that survive re-renders, keyed the way boardBuckets keys rows.
+// A send re-renders EVERY row (deliverBoardDecision -> renderYou), and the
+// poll re-renders on new data: without this, picking an option or typing a
+// note in one question is wiped by any other question's send.
+const _boardDrafts = new Map();
+function boardDraftKey(question, sess) {
+  if (question && question.id != null) return "id:" + String(question.id);
+  const s = (sess && sess.name) || "";
+  const t = (question && question.title) || "";
+  return "t:" + s + ":" + t;
+}
+function boardDraftSave(question, sess, patch) {
+  const key = boardDraftKey(question, sess);
+  const cur = _boardDrafts.get(key) || {};
+  _boardDrafts.set(key, { ...cur, ...patch });
+}
+
 function _boardQuestion(question, sess) {
   const li = document.createElement("li");
   li.className = "action-row board-q";
@@ -557,6 +575,7 @@ function _boardQuestion(question, sess) {
   title.textContent = question.title || "";
   li.appendChild(title);
 
+  const draft = _boardDrafts.get(boardDraftKey(question, sess)) || {};
   const options = question.options || [];
   options.forEach((opt, i) => {
     const label = document.createElement("label");
@@ -565,7 +584,12 @@ function _boardQuestion(question, sess) {
     radio.type = "radio";
     radio.name = `board-q-${question.id}`;
     radio.value = String(i);
-    radio.checked = !!opt.rec || (!options.some((o) => o.rec) && i === 0);
+    radio.checked = draft.opt != null
+      ? i === draft.opt
+      : (!!opt.rec || (!options.some((o) => o.rec) && i === 0));
+    radio.addEventListener("change", () => {
+      boardDraftSave(question, sess, { opt: i });
+    });
     const text = document.createElement("span");
     text.textContent = opt.label || "";
     label.append(radio, text);
@@ -574,9 +598,13 @@ function _boardQuestion(question, sess) {
 
   // The note is opt-in: by default the reply IS the option text.
   const box = document.createElement("textarea");
-  box.className = "reply hidden";
+  box.className = "reply" + (draft.noteOpen ? "" : " hidden");
   box.rows = 2;
   box.placeholder = "Optional note, sent under the option text";
+  box.value = draft.note || "";
+  box.addEventListener("input", () => {
+    boardDraftSave(question, sess, { note: box.value });
+  });
   li.appendChild(box);
 
   const act = document.createElement("div");
@@ -584,10 +612,11 @@ function _boardQuestion(question, sess) {
   const noteBtn = document.createElement("button");
   noteBtn.type = "button";
   noteBtn.className = "btn-link";
-  noteBtn.textContent = "Add a note";
+  noteBtn.textContent = draft.noteOpen ? "Hide note" : "Add a note";
   noteBtn.addEventListener("click", () => {
     const hidden = box.classList.toggle("hidden");
     noteBtn.textContent = hidden ? "Add a note" : "Hide note";
+    boardDraftSave(question, sess, { noteOpen: !hidden });
     if (!hidden) box.focus();
   });
   const btn = document.createElement("button");

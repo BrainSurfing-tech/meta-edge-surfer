@@ -23,6 +23,7 @@ function extract(name) {
 }
 
 const apiSendSrc = src.slice(src.indexOf("const apiSend ="), src.indexOf("const apiSchedEvents"));
+const draftsDecl = src.slice(src.indexOf("const _boardDrafts"), src.indexOf("function _boardQuestion("));
 const actionGroupsSrc = src.slice(src.indexOf("const ACTION_GROUPS = ["), src.indexOf("];", src.indexOf("const ACTION_GROUPS = [")) + 2);
 const ctx = {
   state: { token: "tok", base: "http://stub.invalid" },
@@ -162,6 +163,7 @@ vm.runInContext(
   `}\n${apiSendSrc}\n${extract("sendBoardDecision")}\n` +
   `${extract("boardSentRecord")}\n${extract("rememberBoardSent")}\n` +
   `${extract("boardQuestionOffered")}\n${extract("boardSentText")}\n${extract("fmtTime")}\n` +
+  `${draftsDecl}\n${extract("boardDraftKey")}\n${extract("boardDraftSave")}\n` +
   `${extract("deliverBoardDecision")}\n${extract("clampPollSeconds")}\n` +
   `${extract("boardBuckets")}\n${extract("youCount")}\n${actionGroupsSrc}\n`,
   clickCtx);
