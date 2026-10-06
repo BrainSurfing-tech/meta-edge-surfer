@@ -636,6 +636,16 @@ function _boardQuestion(question, sess) {
     const picked = li.querySelector("input:checked");
     const opt = (picked && options[+picked.value]) || {};
     const note = box.value.trim();
+    // card #291: a yes/no tap on a friction pair goes through the friction
+    // helper (bare word, in-thread, close cites it); anything with a note
+    // takes the normal path.
+    const side = (typeof boardFrictionTap === "function")
+      ? boardFrictionTap(question, opt.text || opt.label || "", note)
+      : null;
+    if (side) {
+      deliverFrictionReply(btn, question, side, opt.label || "");
+      return;
+    }
     deliverBoardDecision(btn, question,
       (opt.text || opt.label || "") + (note ? "\n" + note : ""), opt.label || "");
   });
@@ -2018,5 +2028,43 @@ async function sendFrictionReply(question, which) {
     throw new Error("not a friction question");
   }
   return sendBoardDecisionAndClose(question, friction[which]);
+}
+// Which side of a friction question the picked option is on ("yes"/"no"),
+// or null when this tap must take the normal path: not a friction pair, a
+// free note appended (the note breaks the bare word the gateway matches),
+// or the pick maps to neither side.
+function boardFrictionTap(question, optText, note) {
+  if (note && String(note).trim() !== "") return null;
+  const friction = boardFrictionReply(question);
+  if (!friction) return null;
+  const text = String(optText || "");
+  if (text === friction.yes) return "yes";
+  if (text === friction.no) return "no";
+  return null;
+}
+// The You tab's Send control for a friction tap: same Sent/draft/count
+// bookkeeping as deliverBoardDecision, but the send goes through the
+// friction helper (rework #1132 clause 3 — the tab calls the helper).
+async function deliverFrictionReply(button, question, which, label) {
+  if (!button || button.disabled) return;
+  button.disabled = true;
+  const err = button.parentElement && button.parentElement.querySelector
+    ? button.parentElement.querySelector(".board-send-err")
+    : null;
+  if (err) err.textContent = "";
+  try {
+    const { sent: r } = await sendFrictionReply(question, which);
+    const id = r && r.id != null ? r.id : "";
+    const rec = { id, label: label || "", at: new Date().toISOString() };
+    rememberBoardSent(question && question.id, rec);
+    _boardDrafts.delete(boardDraftKey(question, null));
+    button.textContent = boardSentText(rec);
+    if (typeof renderYou === "function") renderYou();
+  } catch (e) {
+    button.disabled = false;
+    const msg = e && e.message ? e.message : String(e);
+    if (err) err.textContent = msg;
+    else if (typeof setStatus === "function") setStatus("send: " + msg, "err");
+  }
 }
 // ---------- end commander relay close (#291) ----------

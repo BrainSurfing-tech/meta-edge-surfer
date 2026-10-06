@@ -106,3 +106,80 @@ assert.equal(JSON.parse(ctx.calls[0].body).thread_id, "ask-thread-uuid-1");
 assert.ok(JSON.parse(ctx.calls[1].body).evidence.includes("relayed-from=msg:291"));
 
 console.log("291 commander-close app tests: all passed");
+
+assert.equal(typeof ctx.boardFrictionTap, "function",
+  "RED: boardFrictionTap missing on base");
+
+// 6. tap routing: the picked option's side, null off-path.
+const fq = { options: [{ label: "Yes", text: "yes" }, { label: "No", text: "no" }] };
+assert.equal(ctx.boardFrictionTap(fq, "yes", ""), "yes");
+assert.equal(ctx.boardFrictionTap(fq, "no", ""), "no");
+assert.equal(ctx.boardFrictionTap(fq, "yes", "plus a note"), null,
+  "a note breaks the bare word: normal path");
+assert.equal(ctx.boardFrictionTap({
+  options: [{ label: "Ship", text: "Yes, ship" }, { label: "Hold", text: "nope" }],
+}, "Yes, ship", ""), null, "prose pair takes the normal path");
+
+// 7. the You tab Send for a friction tap invokes the friction helper and
+// keeps the Sent bookkeeping (RED: deliverFrictionReply missing on base).
+const store = {};
+const fctx = {
+  state: { token: "tok", base: "http://stub.invalid" },
+  selfNode() { return "commander"; },
+  calls: [],
+  helperCalls: [],
+  localStorage: {
+    getItem(k) { return Object.prototype.hasOwnProperty.call(store, k) ? store[k] : null; },
+    setItem(k, v) { store[k] = String(v); },
+  },
+  fetch: async (url, opts) => {
+    fctx.calls.push({ url: String(url), body: opts && opts.body });
+    const u = String(url);
+    if (u.includes("/board/obligations/") && u.endsWith("/close"))
+      return { ok: true, status: 200, statusText: "OK",
+        json: async () => ({ status: "closed" }) };
+    return { ok: true, status: 200, statusText: "OK", json: async () => ({ id: 291 }) };
+  },
+};
+vm.createContext(fctx);
+const apiSendSrc2 = src.slice(src.indexOf("const apiSend ="), src.indexOf("const apiSchedEvents"));
+const draftsDecl = src.slice(src.indexOf("const _boardDrafts"), src.indexOf("function _boardQuestion("));
+vm.runInContext(
+  `async function api(path, opts = {}) {\n` +
+  `  const url = state.base.replace(/\\/$/, "") + path;\n` +
+  `  const headers = { Authorization: "Bearer " + state.token };\n` +
+  `  if (opts.body) headers["Content-Type"] = "application/json";\n` +
+  `  const res = await fetch(url, { ...opts, headers });\n` +
+  `  if (!res.ok) throw new Error(res.status + " " + res.statusText);\n` +
+  `  return res.json();\n}\n${apiSendSrc2}\n${extract("sendBoardDecision")}\n${closeBlock}\n${block}\n` +
+  `${extract("boardSentRecord")}\n${extract("rememberBoardSent")}\n` +
+  `${extract("boardSentText")}\n${extract("fmtTime")}\n` +
+  `${draftsDecl}\n${extract("boardDraftKey")}\n`,
+  fctx);
+vm.runInContext(
+  `const __origFriction = sendFrictionReply;\n` +
+  `sendFrictionReply = async (...a) => { helperCalls.push(a); return __origFriction(...a); };`,
+  fctx);
+const ferr = { textContent: "" };
+const fbutton = {
+  disabled: false,
+  textContent: "Send decision",
+  parentElement: { querySelector() { return ferr; } },
+};
+await vm.runInContext(
+  `deliverFrictionReply(${JSON.stringify(null)}, null, null, null).catch(() => {})`,
+  fctx).catch(() => {});
+await fctx.deliverFrictionReply(fbutton, {
+  id: "obl-291", title: "Close it?", to_node: "lab-ovh",
+  thread: "ask-thread-uuid-1", obligation: 291,
+  options: [{ label: "Yes", text: "yes" }, { label: "No", text: "no" }],
+}, "yes", "Yes");
+assert.equal(fctx.helperCalls.length, 1, "RED: the tab must call the friction helper");
+assert.deepEqual(fctx.helperCalls[0][1], "yes");
+assert.equal(fbutton.disabled, true);
+assert.match(fbutton.textContent, /^Sent: Yes · \d+s ago$/);
+assert.equal(JSON.parse(fctx.calls[0].body).content, "Re: Close it?\nyes");
+assert.equal(JSON.parse(fctx.calls[0].body).thread_id, "ask-thread-uuid-1");
+assert.ok(JSON.parse(fctx.calls[1].body).evidence.includes("relayed-from=msg:291"));
+
+console.log("291 friction tap tests: all passed");
