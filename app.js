@@ -311,14 +311,26 @@ const apiPeers = () => api("/peers");
 const apiInbox = (limit = 50) =>
   api(`/messages?to=${encodeURIComponent(selfNode())}&limit=${limit}`);
 const apiAll = (limit = 200) => api(`/messages?limit=${limit}`);
-const apiSend = (to_node, kind, content, cc) =>
-  api("/messages", {
-    method: "POST",
-    body: JSON.stringify(
-      cc && cc.length
-        ? { from_node: selfNode(), to_node, kind, content, cc }
-        : { from_node: selfNode(), to_node, kind, content }),
-  });
+const apiSend = (to_node, kind, content, cc, thread_id, reply_to) => {
+  const payload = cc && cc.length
+    ? { from_node: selfNode(), to_node, kind, content, cc }
+    : { from_node: selfNode(), to_node, kind, content };
+  // card #291: the answer to a board question asked in-thread must post in
+  // that same thread, so a friction yes/no resolves to the ask (gateway
+  // relay arm). Absent thread -> the older keyless shape, unchanged.
+  if (thread_id != null && thread_id !== "") payload.thread_id = thread_id;
+  // ruling_1138_structured: reply_to names lab's ask for the row — the
+  // structural bind. Absent -> the keyless shape, unchanged.
+  if (reply_to != null) payload.reply_to = reply_to;
+  return api("/messages", { method: "POST", body: JSON.stringify(payload) });
+};
+// Lab's ask for a row, found structurally (never parsed): the ask is
+// lab-ovh's DM to the commander carrying the row's obligation_id.
+const apiBoardThread = (cardId, limit = 50) =>
+  api(`/board/cards/${encodeURIComponent(cardId)}/thread?limit=${limit}`);
+const apiBoardObligations = (cardId) =>
+  api(cardId == null ? "/board/obligations"
+      : `/board/obligations?card_id=${encodeURIComponent(cardId)}`);
 const apiSchedEvents = () => api("/scheduled-events");
 const apiSchedToggle = (name, enable) =>
   api(`/scheduled-events/${encodeURIComponent(name)}/${enable ? "enable" : "disable"}`,
@@ -506,11 +518,24 @@ function youCount(groups) {
   return ACTION_GROUPS.reduce((n, g) => n + (g.count ? (groups[g.key] || []).length : 0), 0);
 }
 
-function sendBoardDecision(question, reply) {
-  return apiSend(question.to_node, "answer", "Re: " + question.title + "\n" + reply, ["lab-ovh"]);
+async function sendBoardDecision(question, reply, askMsg) {
+  // card #291 / ruling_1142 (2): the tap sends ONLY the word — no Re:
+  // line, no row id in prose — addressed to the ASK SENDER (never to
+  // 'commander'; production questions arrive to_node=commander). Binding
+  // is structural: reply_to names lab's ask for the row (looked up, never
+  // parsed). Without a bound ask there is no reply_to and the gateway
+  // refuses to bind the reply.
+  const thread = question ? (question.thread || null) : null;
+  const oid = boardObligationId(question);
+  const ask = (askMsg !== undefined) ? askMsg
+    : ((oid != null && question && question.card != null)
+      ? await boardAskMessage(question.card, oid) : null);
+  const to = (ask && ask.from_node) || (question && question.to_node);
+  const replyTo = ask && ask.id != null ? ask.id : null;
+  return apiSend(to, "answer", reply, ["lab-ovh"], thread, replyTo);
 }
 
-async function deliverBoardDecision(button, question, reply, label) {
+async function deliverBoardDecision(button, question, reply, label, outcome = "pass") {
   if (!button || button.disabled) return;
   button.disabled = true;
   const err = button.parentElement && button.parentElement.querySelector
@@ -521,7 +546,7 @@ async function deliverBoardDecision(button, question, reply, label) {
     // Sends the DM, and closes the carried obligation when there is one.
     // A failed close throws: nothing below runs, so a failed close is an
     // error on the row, never a "sent" report.
-    const { sent: r } = await sendBoardDecisionAndClose(question, reply);
+    const { sent: r } = await sendBoardDecisionAndClose(question, reply, outcome);
     const id = r && r.id != null ? r.id : "";
     const rec = { id, label: label || "", at: new Date().toISOString() };
     rememberBoardSent(question && question.id, rec);
@@ -574,10 +599,41 @@ function _boardQuestion(question, sess) {
   const li = document.createElement("li");
   li.className = "action-row board-q";
   li.appendChild(_cellEyebrow(question, sess));
-  const title = document.createElement("div");
-  title.className = "action-primary";
-  title.textContent = question.title || "";
-  li.appendChild(title);
+  // ruling_1142 (4): a question carrying an obligation shows the BOUND
+  // row's board fields (attached by refreshActions via boardBoundRow) —
+  // never prose. A row that cannot be fetched shows "row unavailable" and
+  // NO buttons: a blind tap cannot bind.
+  const boundOid = boardObligationId(question);
+  if (boundOid != null) {
+    const primary = document.createElement("div");
+    primary.className = "action-primary";
+    if (question.row) {
+      primary.textContent = boardRowLabel(question.row);
+    } else {
+      primary.textContent = "row unavailable";
+    }
+    li.appendChild(primary);
+    if (!question.row) return li;
+    // ruling_1157 (1): rows on other steps show NO buttons — answer with
+    // the full close form. Their options render display-only (no inputs).
+    if (!boardTapClosable(question.row)) {
+      const form = document.createElement("div");
+      form.className = "action-secondary";
+      form.textContent = "answer with the full close form";
+      li.appendChild(form);
+      const shown = document.createElement("div");
+      shown.className = "action-primary";
+      shown.textContent = (question.options || [])
+        .map((o) => o.label || "").filter(Boolean).join(" / ");
+      li.appendChild(shown);
+      return li;
+    }
+  } else {
+    const title = document.createElement("div");
+    title.className = "action-primary";
+    title.textContent = question.title || "";
+    li.appendChild(title);
+  }
 
   const draft = _boardDrafts.get(boardDraftKey(question, sess)) || {};
   const options = question.options || [];
@@ -630,9 +686,35 @@ function _boardQuestion(question, sess) {
   btn.addEventListener("click", () => {
     const picked = li.querySelector("input:checked");
     const opt = (picked && options[+picked.value]) || {};
+    const optText = opt.text || opt.label || "";
     const note = box.value.trim();
-    deliverBoardDecision(btn, question,
-      (opt.text || opt.label || "") + (note ? "\n" + note : ""), opt.label || "");
+    // ruling_1157 (1): the tapped option maps to its outcome explicitly —
+    // the publisher stamps it (yes=pass, no=fail; prose carries none). A
+    // friction side closes with its outcome (with a note it rides the
+    // normal path, but the SIDE still decides pass/fail). A non-side pick
+    // on an obligation question is display-only: it closes nothing.
+    const side = (typeof boardFrictionTap === "function")
+      ? boardFrictionTap(question, optText, "")
+      : null;
+    const explicitOutcome =
+      (opt.outcome === "pass" || opt.outcome === "fail") ? opt.outcome : null;
+    const oid = boardObligationId(question);
+    if (!side && oid != null) {
+      err.textContent = "this option is display-only and closes nothing";
+      return;
+    }
+    if (!side) {
+      deliverBoardDecision(btn, question,
+        optText + (note ? "\n" + note : ""), opt.label || "");
+      return;
+    }
+    const outcome = explicitOutcome || (side === "yes" ? "pass" : "fail");
+    if (note) {
+      deliverBoardDecision(btn, question, optText + "\n" + note,
+        opt.label || "", outcome);
+      return;
+    }
+    deliverFrictionReply(btn, question, side, opt.label || "");
   });
   const err = document.createElement("p");
   err.className = "board-send-err";
@@ -664,15 +746,19 @@ async function refreshActions(force = false) {
   const me = selfNode();
   try {
     setStatus("loading actions…");
-    const [msgRes, cardRes] = await Promise.all([
+    const [msgRes, cardRes, oblRes] = await Promise.all([
       api(`/messages?to_node=${encodeURIComponent(me)}&limit=200`),
       api(`/board/cards?limit=500`),
+      api("/board/obligations"),
     ]);
-    const sig = JSON.stringify([msgRes, cardRes]);
+    const sig = JSON.stringify([msgRes, cardRes, oblRes]);
     if (!force && sig === _youSig) { setStatus(""); return; }
     _youSig = sig;
     const msgs  = msgRes.messages || [];
     const cards = cardRes.cards || [];
+    // ruling_1138_structured (6): pin each ask to its bound row's board
+    // fields, so the tab shows the row — never the ask prose.
+    attachBoundRows(msgs, (oblRes && oblRes.obligations) || []);
 
     // A question is "waiting" only if unread. read_at is the gateway's own
     // consumed-flag; do NOT infer from anything else.
@@ -689,6 +775,17 @@ async function refreshActions(force = false) {
 
     const boardMsg = newestBoardDm(msgs);
     const board = boardMsg ? parseBoardDm(boardMsg.content) : null;
+    // ruling_1142 (4): resolve the tap card's row here, on the single poll
+    // fetch — the card renders boardBoundRow(), never prose.
+    if (board) {
+      for (const sess of board.sessions || []) {
+        for (const q of (sess && sess.questions) || []) {
+          if (q && boardObligationId(q) != null && q.card != null && !q.row) {
+            q.row = await boardBoundRow(q);
+          }
+        }
+      }
+    }
     _you = { grouped: dedupeYou({ questions, overdue, ready, assigned }, board), board };
     renderYou();
     setStatus("");
@@ -731,6 +828,11 @@ function _youRow(key, it) {
     return li;
   }
   if (it.kind === "question") {
+    // A bound ask shows its row's board fields (id/card/step/accept/holder)
+    // — the ask prose is never rendered.
+    if (it.row) {
+      return _actionRow(boardRowLabel(it.row), `from ${it.from_node} · #${it.id}`, it.created_at);
+    }
     return _actionRow(it.content || "", `from ${it.from_node} · #${it.id}`, it.created_at);
   }
   const meta = [it.stage, it.assignee ? `@${it.assignee}` : null,
@@ -1972,16 +2074,153 @@ const apiBoardObligationClose = (id, outcome, evidence) =>
     body: JSON.stringify({ outcome, evidence }),
   });
 // Sends the answer DM, then — only when the question carries an obligation
-// id — closes it with outcome pass and the answer quoted verbatim. Throws on
-// a failed close so the caller reports an error instead of "sent".
-async function sendBoardDecisionAndClose(question, reply) {
-  const sent = await sendBoardDecision(question, reply);
+// id — closes it with the given outcome (default pass) and the answer quoted
+// verbatim. Throws on a failed close so the caller reports an error instead
+// of "sent".
+async function sendBoardDecisionAndClose(question, reply, outcome = "pass") {
+  // ruling_1142 (2): the tap closes the row DIRECTLY with the commander's
+  // SSO session, citing the bound ask id as evidence (ask:<id> is the ref
+  // the gateway accepts for the tap); no relay is involved. The reply DM
+  // is still cited for the audit trail (and stays relayable by lab).
   const oid = boardObligationId(question);
+  const ask = (oid != null && question && question.card != null)
+    ? await boardAskMessage(question.card, oid) : null;
+  const sent = await sendBoardDecision(question, reply, ask);
   if (oid == null) return { sent, closed: null };
   const dmId = sent && sent.id != null ? sent.id : "";
   const evidence =
-    `Board answer sent (DM #${dmId}): Re: ${question.title}\n${reply}`;
-  const closed = await apiBoardObligationClose(oid, "pass", evidence);
+    `Board answer sent (DM #${dmId}): ${reply}` +
+    (ask && ask.id != null ? `\nask:${ask.id}` : "") +
+    (dmId !== "" ? `\nrelayed-from=msg:${dmId}` : "");
+  const closed = await apiBoardObligationClose(oid, outcome, evidence);
   return { sent, closed };
 }
 // ---------- end board close (#983) ----------
+
+// ---------- commander relay close (#291) ----------
+// A friction question is a bare yes/no pair: the tap sends exactly "yes" or
+// "no" with reply_to set to lab's ask for the row, in the ask thread — the
+// gateway binds the reply structurally on the relay arm.
+const _FRICTION_YES = /^\s*y(es|eah|ep)?\s*$/i;
+const _FRICTION_NO = /^\s*n(o|ope)?\s*$/i;
+function boardFrictionReply(question) {
+  const options = (question && question.options) || [];
+  if (options.length !== 2) return null;
+  const texts = options.map((o) => String((o && o.text) || (o && o.label) || ""));
+  const yesIdx = texts.findIndex((t) => _FRICTION_YES.test(t));
+  const noIdx = texts.findIndex((t) => _FRICTION_NO.test(t));
+  if (yesIdx < 0 || noIdx < 0 || yesIdx === noIdx) return null;
+  return { yes: texts[yesIdx], no: texts[noIdx] };
+}
+// Lab's ask FOR a row, by card + row id (structural: from lab-ovh to the
+// commander carrying the obligation_id — titles and prose never bind).
+// Returns the ask message (id + sender) or null.
+async function boardAskMessage(cardId, oid) {
+  if (cardId == null || oid == null) return null;
+  let msgs = [];
+  try {
+    const thread = await apiBoardThread(cardId);
+    msgs = (thread && (thread.messages || thread.posts || thread.thread)) || [];
+  } catch (e) { return null; }
+  const ask = (msgs || []).find((m) => m && m.from_node === "lab-ovh" &&
+    m.to_node === "commander" && m.obligation_id === oid);
+  return ask && ask.id != null ? ask : null;
+}
+async function boardAskForRow(cardId, oid) {
+  const ask = await boardAskMessage(cardId, oid);
+  return ask && ask.id != null ? ask.id : null;
+}
+// The ask id a tap answers, or null when the question binds to no ask (no
+// fetch at all then — the older keyless shape is untouched).
+async function boardAskId(question) {
+  const oid = boardObligationId(question);
+  if (oid == null || !question || question.card == null) return null;
+  return boardAskForRow(question.card, oid);
+}
+// The bound row's board fields (never the ask prose), or null.
+async function boardBoundRow(question) {
+  const oid = boardObligationId(question);
+  if (oid == null || !question || question.card == null) return null;
+  let rows = [];
+  try {
+    const res = await apiBoardObligations(question.card);
+    rows = (res && res.obligations) || [];
+  } catch (e) { return null; }
+  return (rows || []).find((o) => o && o.id === oid) || null;
+}
+// ruling_1157 (1): tap-closable steps — build and step-less rows only.
+// Validate/plan-review rows answer with the full close form.
+function boardTapClosable(row) {
+  return !!row && (!row.step || row.step === "build");
+}
+// The You tab shows this for a bound ask: id/card/step/accept/holder.
+function boardRowLabel(row) {
+  if (!row) return "";
+  const parts = [`obligation #${row.id}`];
+  if (row.card_id != null) parts.push(`card #${row.card_id}`);
+  parts.push(row.step || "unstepped");
+  if (row.accept) parts.push(String(row.accept));
+  if (row.holder) parts.push(`@${row.holder}`);
+  return parts.join(" · ");
+}
+// Pin each ask message to its bound row (by obligation_id); prose-only
+// messages pass through untouched.
+function attachBoundRows(questions, obligations) {
+  const byId = new Map(((obligations) || []).map((o) => [o && o.id, o]));
+  for (const m of questions || []) {
+    if (m && m.obligation_id != null && byId.has(m.obligation_id)) {
+      m.row = byId.get(m.obligation_id);
+    }
+  }
+  return questions;
+}
+// One tap for a friction question: the bare word goes in-thread via the same
+// send + tap-close path, so the existing Sent/draft/count behaviour holds.
+// ruling_1116_core (6): yes closes pass, no closes fail.
+async function sendFrictionReply(question, which) {
+  const friction = boardFrictionReply(question);
+  if (!friction || (which !== "yes" && which !== "no")) {
+    throw new Error("not a friction question");
+  }
+  return sendBoardDecisionAndClose(question, friction[which],
+    which === "yes" ? "pass" : "fail");
+}
+// Which side of a friction question the picked option is on ("yes"/"no"),
+// or null when this tap must take the normal path: not a friction pair, a
+// free note appended (the note breaks the bare word the gateway matches),
+// or the pick maps to neither side.
+function boardFrictionTap(question, optText, note) {
+  if (note && String(note).trim() !== "") return null;
+  const friction = boardFrictionReply(question);
+  if (!friction) return null;
+  const text = String(optText || "");
+  if (text === friction.yes) return "yes";
+  if (text === friction.no) return "no";
+  return null;
+}
+// The You tab's Send control for a friction tap: same Sent/draft/count
+// bookkeeping as deliverBoardDecision, but the send goes through the
+// friction helper (rework #1132 clause 3 — the tab calls the helper).
+async function deliverFrictionReply(button, question, which, label) {
+  if (!button || button.disabled) return;
+  button.disabled = true;
+  const err = button.parentElement && button.parentElement.querySelector
+    ? button.parentElement.querySelector(".board-send-err")
+    : null;
+  if (err) err.textContent = "";
+  try {
+    const { sent: r } = await sendFrictionReply(question, which);
+    const id = r && r.id != null ? r.id : "";
+    const rec = { id, label: label || "", at: new Date().toISOString() };
+    rememberBoardSent(question && question.id, rec);
+    _boardDrafts.delete(boardDraftKey(question, null));
+    button.textContent = boardSentText(rec);
+    if (typeof renderYou === "function") renderYou();
+  } catch (e) {
+    button.disabled = false;
+    const msg = e && e.message ? e.message : String(e);
+    if (err) err.textContent = msg;
+    else if (typeof setStatus === "function") setStatus("send: " + msg, "err");
+  }
+}
+// ---------- end commander relay close (#291) ----------

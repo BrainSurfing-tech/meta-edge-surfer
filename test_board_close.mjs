@@ -21,7 +21,9 @@ function extract(name) {
     if (src[i] === "{") depth++;
     else if (src[i] === "}") { depth--; if (depth === 0) { end = i + 1; break; } }
   }
-  return src.slice(start, end);
+  let from = start;
+  if (src.slice(Math.max(0, start - 6), start) === "async ") from = start - 6;
+  return src.slice(from, end);
 }
 // apiSend is a const arrow — slice it whole like test_you_board does.
 const apiSendSrc = src.slice(src.indexOf("const apiSend ="), src.indexOf("const apiSchedEvents"));
@@ -60,7 +62,7 @@ vm.runInContext(
   `    try { detail = (await res.json()).detail || ""; } catch {}\n` +
   `    throw new Error(res.status + " " + res.statusText + (detail ? " — " + detail : ""));\n` +
   `  }\n` +
-  `  return res.json();\n}\n${apiSendSrc}\n${extract("sendBoardDecision")}\n${block}`,
+  `  return res.json();\n}\n${apiSendSrc}\n${extract("boardAskForRow")}\n${extract("boardAskId")}\n${extract("sendBoardDecision")}\n${block}`,
   ctx);
 
 const driver = `
