@@ -406,10 +406,12 @@ function parseBoardDm(content) {
 
 function newestBoardDm(messages) {
   // card #1018: the board publisher has sent as board-publisher since
-  // 09-30. lab-ovh stays accepted. Any other sender is not a board DM.
-  const boardSenders = { "board-publisher": 1, "lab-ovh": 1 };
+  // 09-30. lab-ovh stays accepted. A Set, not a plain-object lookup:
+  // boardSenders[m.from_node] is true for prototype names (constructor,
+  // toString, __proto__, hasOwnProperty) — drop's #1195 probe.
+  const boardSenders = new Set(["board-publisher", "lab-ovh"]);
   const boards = (messages || []).filter(
-    (m) => m && boardSenders[m.from_node]
+    (m) => m && boardSenders.has(m.from_node)
       && boardEnvelope(m.content) && parseBoardDm(m.content));
   boards.sort((a, b) => (b.id || 0) - (a.id || 0));
   return boards[0] || null;

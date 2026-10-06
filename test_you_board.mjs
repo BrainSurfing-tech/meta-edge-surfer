@@ -123,6 +123,9 @@ assert.equal(
 assert.equal(
   ctx.newestBoardDm([{ id: 30, from_node: "lab-ovh", content: publisherBody }]).id,
   30, "lab-ovh is still an accepted board sender");
+assert.equal(
+  ctx.newestBoardDm([{ id: 31, from_node: "constructor", content: publisherBody }]),
+  null, "a prototype name is not a board sender");
 assert.equal(ctx.parseBoardDm(picked.content).sessions[0].name, "science-claude");
 
 const visible = ctx.visibleInbox([newest, plain, { id: 8, content: "hello" }]);
