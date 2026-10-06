@@ -105,6 +105,17 @@ assert.equal(JSON.parse(ctx.calls[0].body).content, "Re: Close it?\nyes");
 assert.equal(JSON.parse(ctx.calls[0].body).thread_id, "ask-thread-uuid-1");
 assert.ok(JSON.parse(ctx.calls[1].body).evidence.includes("relayed-from=msg:291"));
 
+// 5b. ruling_1116_core (6): a 'no' tap closes fail, still citing the DM.
+ctx.calls.length = 0;
+await ctx.sendFrictionReply(
+  { id: "obl-291", title: "Close it?", to_node: "lab-ovh",
+    thread: "ask-thread-uuid-1", obligation: 291,
+    options: [{ label: "Yes", text: "yes" }, { label: "No", text: "no" }] }, "no");
+assert.equal(JSON.parse(ctx.calls[0].body).content, "Re: Close it?\nno");
+const noClose = JSON.parse(ctx.calls[1].body);
+assert.equal(noClose.outcome, "fail", "RED: a no tap must close fail");
+assert.ok(noClose.evidence.includes("relayed-from=msg:291"));
+
 console.log("291 commander-close app tests: all passed");
 
 assert.equal(typeof ctx.boardFrictionTap, "function",

@@ -1987,9 +1987,10 @@ const apiBoardObligationClose = (id, outcome, evidence) =>
     body: JSON.stringify({ outcome, evidence }),
   });
 // Sends the answer DM, then — only when the question carries an obligation
-// id — closes it with outcome pass and the answer quoted verbatim. Throws on
-// a failed close so the caller reports an error instead of "sent".
-async function sendBoardDecisionAndClose(question, reply) {
+// id — closes it with the given outcome (default pass) and the answer quoted
+// verbatim. Throws on a failed close so the caller reports an error instead
+// of "sent".
+async function sendBoardDecisionAndClose(question, reply, outcome = "pass") {
   const sent = await sendBoardDecision(question, reply);
   const oid = boardObligationId(question);
   if (oid == null) return { sent, closed: null };
@@ -2000,7 +2001,7 @@ async function sendBoardDecisionAndClose(question, reply) {
     // (relayed-from=msg:<id>). Inert when the SSO session closes directly
     // as commander; load-bearing when anyone else relays this decision.
     (dmId !== "" ? `\nrelayed-from=msg:${dmId}` : "");
-  const closed = await apiBoardObligationClose(oid, "pass", evidence);
+  const closed = await apiBoardObligationClose(oid, outcome, evidence);
   return { sent, closed };
 }
 // ---------- end board close (#983) ----------
@@ -2022,12 +2023,14 @@ function boardFrictionReply(question) {
 }
 // One tap for a friction question: the bare word goes in-thread via the same
 // send + tap-close path, so the existing Sent/draft/count behaviour holds.
+// ruling_1116_core (6): yes closes pass, no closes fail.
 async function sendFrictionReply(question, which) {
   const friction = boardFrictionReply(question);
   if (!friction || (which !== "yes" && which !== "no")) {
     throw new Error("not a friction question");
   }
-  return sendBoardDecisionAndClose(question, friction[which]);
+  return sendBoardDecisionAndClose(question, friction[which],
+    which === "yes" ? "pass" : "fail");
 }
 // Which side of a friction question the picked option is on ("yes"/"no"),
 // or null when this tap must take the normal path: not a friction pair, a
