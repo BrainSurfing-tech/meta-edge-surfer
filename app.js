@@ -511,8 +511,13 @@ function youCount(groups) {
 function sendBoardDecision(question, reply) {
   // card #291: carry the ask thread when the question has one, so the reply
   // DM is usable as a relayed-from reference on the gateway relay arm.
+  // ruling_1135_binding: the Re: line names the row ('obligation #N') so the
+  // gateway binds the reply to THIS row, never the card thread.
   const thread = question ? (question.thread || null) : null;
-  return apiSend(question.to_node, "answer", "Re: " + question.title + "\n" + reply, ["lab-ovh"], thread);
+  const oid = question ? boardObligationId(question) : null;
+  const subject = "Re: " + question.title +
+    (oid != null ? ` (obligation #${oid})` : "");
+  return apiSend(question.to_node, "answer", subject + "\n" + reply, ["lab-ovh"], thread);
 }
 
 async function deliverBoardDecision(button, question, reply, label) {

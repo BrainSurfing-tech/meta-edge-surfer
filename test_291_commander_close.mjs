@@ -101,7 +101,7 @@ const f = await ctx.sendFrictionReply(
   { id: "obl-291", title: "Close it?", to_node: "lab-ovh",
     thread: "ask-thread-uuid-1", obligation: 291,
     options: [{ label: "Yes", text: "yes" }, { label: "No", text: "no" }] }, "yes");
-assert.equal(JSON.parse(ctx.calls[0].body).content, "Re: Close it?\nyes");
+assert.equal(JSON.parse(ctx.calls[0].body).content, "Re: Close it? (obligation #291)\nyes");
 assert.equal(JSON.parse(ctx.calls[0].body).thread_id, "ask-thread-uuid-1");
 assert.ok(JSON.parse(ctx.calls[1].body).evidence.includes("relayed-from=msg:291"));
 
@@ -111,10 +111,16 @@ await ctx.sendFrictionReply(
   { id: "obl-291", title: "Close it?", to_node: "lab-ovh",
     thread: "ask-thread-uuid-1", obligation: 291,
     options: [{ label: "Yes", text: "yes" }, { label: "No", text: "no" }] }, "no");
-assert.equal(JSON.parse(ctx.calls[0].body).content, "Re: Close it?\nno");
+assert.equal(JSON.parse(ctx.calls[0].body).content, "Re: Close it? (obligation #291)\nno");
 const noClose = JSON.parse(ctx.calls[1].body);
 assert.equal(noClose.outcome, "fail", "RED: a no tap must close fail");
 assert.ok(noClose.evidence.includes("relayed-from=msg:291"));
+
+// 5c. ruling_1135_binding: a question with no row id sends the bare Re:
+// line (the gateway will refuse to bind it — it names nothing).
+ctx.calls.length = 0;
+await ctx.sendBoardDecision({ title: "Ship?", to_node: "lab-ovh" }, "yes");
+assert.equal(JSON.parse(ctx.calls[0].body).content, "Re: Ship?\nyes");
 
 console.log("291 commander-close app tests: all passed");
 
@@ -189,7 +195,7 @@ assert.equal(fctx.helperCalls.length, 1, "RED: the tab must call the friction he
 assert.deepEqual(fctx.helperCalls[0][1], "yes");
 assert.equal(fbutton.disabled, true);
 assert.match(fbutton.textContent, /^Sent: Yes · \d+s ago$/);
-assert.equal(JSON.parse(fctx.calls[0].body).content, "Re: Close it?\nyes");
+assert.equal(JSON.parse(fctx.calls[0].body).content, "Re: Close it? (obligation #291)\nyes");
 assert.equal(JSON.parse(fctx.calls[0].body).thread_id, "ask-thread-uuid-1");
 assert.ok(JSON.parse(fctx.calls[1].body).evidence.includes("relayed-from=msg:291"));
 

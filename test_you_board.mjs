@@ -47,7 +47,7 @@ vm.runInContext(
   `  if (opts.body) headers["Content-Type"] = "application/json";\n` +
   `  const res = await fetch(url, { ...opts, headers });\n` +
   `  return res.json();\n` +
-  `}\n${apiSendSrc}\n${extract("sendBoardDecision")}\n`,
+  `}\n${apiSendSrc}\n${extract("boardObligationId")}\n${extract("sendBoardDecision")}\n`,
   ctx);
 
 const board = {
@@ -162,7 +162,7 @@ vm.runInContext(
   `  const res = await fetch(url, { ...opts, headers });\n` +
   `  if (!res.ok) throw new Error(res.status + " " + res.statusText);\n` +
   `  return res.json();\n` +
-  `}\n${apiSendSrc}\n${extract("sendBoardDecision")}\n` +
+  `}\n${apiSendSrc}\n${extract("boardObligationId")}\n${extract("sendBoardDecision")}\n` +
   `${extract("boardSentRecord")}\n${extract("rememberBoardSent")}\n` +
   `${extract("boardQuestionOffered")}\n${extract("boardSentText")}\n${extract("fmtTime")}\n` +
   `${draftsDecl}\n${extract("boardDraftKey")}\n${extract("boardDraftSave")}\n` +
