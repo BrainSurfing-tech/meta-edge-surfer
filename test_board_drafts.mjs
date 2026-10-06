@@ -77,7 +77,8 @@ const ctx = {
 vm.createContext(ctx);
 vm.runInContext(
   `${draftsDecl}\n${extract("_cellEyebrow")}\n${extract("boardDraftKey")}\n` +
-  `${extract("boardDraftSave")}\n${extract("_boardQuestion")}\n`,
+  `${extract("boardDraftSave")}\n${extract("boardObligationId")}\n` +
+  `${extract("boardRowLabel")}\n${extract("_boardQuestion")}\n`,
   ctx);
 
 // First render: defaults (rec Ship checked, note hidden+empty).

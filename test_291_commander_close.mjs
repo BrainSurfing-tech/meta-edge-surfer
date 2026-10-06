@@ -104,13 +104,15 @@ assert.equal(JSON.parse(ctx.calls[0].body).thread_id, undefined);
 // word with reply_to, and the close cites the just-sent DM.
 ctx.calls.length = 0;
 const r = await ctx.sendBoardDecisionAndClose(
-  { id: "obl-291", title: "Close it?", to_node: "lab-ovh", card: 7,
+  { id: "obl-291", title: "Close it?", to_node: "commander", card: 7,
     thread: "ask-thread-uuid-1", obligation: 291 }, "yes");
 assert.equal(r.closed.status, "closed");
 assert.equal(ctx.calls.length, 3, "ask lookup + send + close");
 const sentBody = JSON.parse(ctx.calls[1].body);
 assert.equal(sentBody.content, "yes",
   "RED: the tap sends ONLY the word — no Re: line, no row id in prose");
+assert.equal(sentBody.to_node, "lab-ovh",
+  "RED: the tap answers the ask sender, never 'commander'");
 assert.equal(sentBody.reply_to, 55,
   "RED: reply_to names lab's ask for the row (found by obligation_id, " +
   "even though the ask prose names row #999)");
@@ -119,16 +121,20 @@ const closeBody = JSON.parse(ctx.calls[2].body);
 assert.ok(closeBody.evidence.includes("yes"), "evidence quotes the answer");
 assert.ok(!closeBody.evidence.includes("Re:"),
   "RED: evidence quotes the bare word, no Re: line");
+assert.ok(closeBody.evidence.includes("ask:55"),
+  "RED: evidence cites the bound ask id (the direct-close ref)");
 assert.ok(closeBody.evidence.includes("relayed-from=msg:291"),
   "RED: evidence must cite the decision DM for the relay arm");
 
 // 5. friction tap helper sends the bare word in-thread and closes citing it.
 ctx.calls.length = 0;
 const f = await ctx.sendFrictionReply(
-  { id: "obl-291", title: "Close it?", to_node: "lab-ovh", card: 7,
+  { id: "obl-291", title: "Close it?", to_node: "commander", card: 7,
     thread: "ask-thread-uuid-1", obligation: 291,
     options: [{ label: "Yes", text: "yes" }, { label: "No", text: "no" }] }, "yes");
 assert.equal(JSON.parse(ctx.calls[1].body).content, "yes");
+assert.equal(JSON.parse(ctx.calls[1].body).to_node, "lab-ovh",
+  "RED: the friction tap answers the ask sender");
 assert.equal(JSON.parse(ctx.calls[1].body).reply_to, 55);
 assert.equal(JSON.parse(ctx.calls[1].body).thread_id, "ask-thread-uuid-1");
 assert.ok(JSON.parse(ctx.calls[2].body).evidence.includes("relayed-from=msg:291"));
@@ -136,7 +142,7 @@ assert.ok(JSON.parse(ctx.calls[2].body).evidence.includes("relayed-from=msg:291"
 // 5b. ruling_1116_core (6): a 'no' tap closes fail, still citing the DM.
 ctx.calls.length = 0;
 await ctx.sendFrictionReply(
-  { id: "obl-291", title: "Close it?", to_node: "lab-ovh", card: 7,
+  { id: "obl-291", title: "Close it?", to_node: "commander", card: 7,
     thread: "ask-thread-uuid-1", obligation: 291,
     options: [{ label: "Yes", text: "yes" }, { label: "No", text: "no" }] }, "no");
 assert.equal(JSON.parse(ctx.calls[1].body).content, "no",
@@ -223,7 +229,7 @@ await vm.runInContext(
   `deliverFrictionReply(${JSON.stringify(null)}, null, null, null).catch(() => {})`,
   fctx).catch(() => {});
 await fctx.deliverFrictionReply(fbutton, {
-  id: "obl-291", title: "Close it?", to_node: "lab-ovh", card: 7,
+  id: "obl-291", title: "Close it?", to_node: "commander", card: 7,
   thread: "ask-thread-uuid-1", obligation: 291,
   options: [{ label: "Yes", text: "yes" }, { label: "No", text: "no" }],
 }, "yes", "Yes");
@@ -231,6 +237,8 @@ assert.equal(fctx.helperCalls.length, 1, "RED: the tab must call the friction he
 assert.deepEqual(fctx.helperCalls[0][1], "yes");
 assert.equal(fbutton.disabled, true);
 assert.match(fbutton.textContent, /^Sent: Yes · \d+s ago$/);
+assert.ok(JSON.parse(fctx.calls[2].body).evidence.includes("ask:55"),
+  "RED: the tab close cites the bound ask");
 assert.equal(JSON.parse(fctx.calls[1].body).content, "yes",
   "RED: the tab tap sends ONLY the word");
 assert.equal(JSON.parse(fctx.calls[1].body).reply_to, 55,
@@ -281,3 +289,84 @@ assert.ok(!JSON.stringify(askMsg.row).includes("OFFERED"),
   "the bound row is board fields, never the ask prose");
 
 console.log("291 bound-row app tests: all passed");
+
+// 9. ruling_1142 (2): the ask resolves with its sender; an unbound tap
+// cites no ask.
+const tapAsk = await ctx.boardAskMessage(7, 291);
+assert.equal(tapAsk.id, 55, "RED: boardAskMessage resolves the ask");
+assert.equal(tapAsk.from_node, "lab-ovh", "RED: the tap answers this sender");
+assert.equal(await ctx.boardAskMessage(7, 12345), null);
+assert.equal(await ctx.boardAskMessage(null, 291), null);
+ctx.calls.length = 0;
+const unbound = await ctx.sendBoardDecisionAndClose(
+  { id: "obl-9", title: "Hold?", to_node: "commander",
+    thread: "ask-thread-uuid-9", obligation: 999 }, "yes");
+assert.equal(unbound.closed.status, "closed");
+assert.equal(ctx.calls.length, 2, "no ask lookup without a card: send + close");
+assert.equal(JSON.parse(ctx.calls[0].body).reply_to, undefined);
+assert.ok(!JSON.parse(ctx.calls[1].body).evidence.includes("ask:"),
+  "RED: an unbound tap cites no ask");
+assert.equal(JSON.parse(ctx.calls[0].body).to_node, "commander",
+  "no ask sender known: the older address shape is untouched");
+
+// 10. ruling_1142 (4): refreshActions resolves each tap card's row via
+// boardBoundRow on the single poll fetch.
+{
+  const board = { sessions: [{ name: "lab-ovh", questions: [
+    { id: "obl-291", title: "Close it?", to_node: "commander", card: 7,
+      obligation: 291,
+      options: [{ label: "Yes", text: "yes" }, { label: "No", text: "no" }] },
+    { id: "obl-999", title: "Ghost?", to_node: "commander", card: 7,
+      obligation: 999,
+      options: [{ label: "Yes", text: "yes" }, { label: "No", text: "no" }] },
+  ] }] };
+  const rctx = {
+    state: { token: "tok", base: "http://stub.invalid" },
+    selfNode() { return "commander"; },
+    setStatus() {},
+    renders: 0,
+    renderActions() { rctx.renders++; },
+    newestBoardDm: () => ({ content: "board" }),
+    parseBoardDm: () => board,
+    dedupeYou: (g) => g,
+    _CLOSED_STAGES: new Set(["done", "parked"]),
+    fetch: async (url, opts) => {
+      const u = String(url);
+      if (u.includes("/board/obligations"))
+        return { ok: true, status: 200, statusText: "OK",
+          json: async () => ({ obligations: [
+            { id: 291, card_id: 7, step: "build", accept: "PASS = ref lands",
+              holder: "commander", status: "open" },
+          ] }) };
+      if (u.includes("/thread?"))
+        return { ok: true, status: 200, statusText: "OK",
+          json: async () => ({ messages: [
+            { id: 55, from_node: "lab-ovh", to_node: "commander",
+              content: "OFFERED", obligation_id: 291 },
+          ] }) };
+      return { ok: true, status: 200, statusText: "OK",
+        json: async () => ({ messages: [], cards: [] }) };
+    },
+  };
+  vm.createContext(rctx);
+  vm.runInContext(
+    `async function api(path, opts = {}) { return (await fetch(state.base + path, opts)).json(); }
+` +
+    `let _you = null;\nlet _youSig = null;\n` +
+    `function renderYou() { if (!_you) return; renderActions({}); }\n` +
+    `${apiSendSrc}\n${extract("boardObligationId")}\n` +
+    `${extract("boardAskMessage")}\n` +
+    `${extract("boardBoundRow")}\n${extract("attachBoundRows")}\n` +
+    `${extract("refreshActions")}`,
+    rctx);
+  await rctx.refreshActions(true);
+  const qs = board.sessions[0].questions;
+  assert.ok(qs[0].row,
+    "RED: the tap card carries its bound row (boardBoundRow used)");
+  assert.equal(qs[0].row.id, 291);
+  assert.equal(qs[0].row.step, "build");
+  assert.equal(qs[1].row, null,
+    "RED: a row that cannot be fetched leaves no row (no buttons, never prose)");
+}
+
+console.log("291 tap-card app tests: all passed");

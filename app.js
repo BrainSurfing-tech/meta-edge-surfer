@@ -518,14 +518,21 @@ function youCount(groups) {
   return ACTION_GROUPS.reduce((n, g) => n + (g.count ? (groups[g.key] || []).length : 0), 0);
 }
 
-async function sendBoardDecision(question, reply) {
-  // card #291 / ruling_1138_structured: the tap sends ONLY the word — no Re:
-  // line, no row id in prose. Binding is structural: reply_to names lab's
-  // ask for the row (looked up, never parsed). Without a bound ask there is
-  // no reply_to and the gateway refuses to bind the reply.
+async function sendBoardDecision(question, reply, askMsg) {
+  // card #291 / ruling_1142 (2): the tap sends ONLY the word — no Re:
+  // line, no row id in prose — addressed to the ASK SENDER (never to
+  // 'commander'; production questions arrive to_node=commander). Binding
+  // is structural: reply_to names lab's ask for the row (looked up, never
+  // parsed). Without a bound ask there is no reply_to and the gateway
+  // refuses to bind the reply.
   const thread = question ? (question.thread || null) : null;
-  const replyTo = await boardAskId(question);
-  return apiSend(question.to_node, "answer", reply, ["lab-ovh"], thread, replyTo);
+  const oid = boardObligationId(question);
+  const ask = (askMsg !== undefined) ? askMsg
+    : ((oid != null && question && question.card != null)
+      ? await boardAskMessage(question.card, oid) : null);
+  const to = (ask && ask.from_node) || (question && question.to_node);
+  const replyTo = ask && ask.id != null ? ask.id : null;
+  return apiSend(to, "answer", reply, ["lab-ovh"], thread, replyTo);
 }
 
 async function deliverBoardDecision(button, question, reply, label) {
@@ -592,10 +599,27 @@ function _boardQuestion(question, sess) {
   const li = document.createElement("li");
   li.className = "action-row board-q";
   li.appendChild(_cellEyebrow(question, sess));
-  const title = document.createElement("div");
-  title.className = "action-primary";
-  title.textContent = question.title || "";
-  li.appendChild(title);
+  // ruling_1142 (4): a question carrying an obligation shows the BOUND
+  // row's board fields (attached by refreshActions via boardBoundRow) —
+  // never prose. A row that cannot be fetched shows "row unavailable" and
+  // NO buttons: a blind tap cannot bind.
+  const boundOid = boardObligationId(question);
+  if (boundOid != null) {
+    const primary = document.createElement("div");
+    primary.className = "action-primary";
+    if (question.row) {
+      primary.textContent = boardRowLabel(question.row);
+    } else {
+      primary.textContent = "row unavailable";
+    }
+    li.appendChild(primary);
+    if (!question.row) return li;
+  } else {
+    const title = document.createElement("div");
+    title.className = "action-primary";
+    title.textContent = question.title || "";
+    li.appendChild(title);
+  }
 
   const draft = _boardDrafts.get(boardDraftKey(question, sess)) || {};
   const options = question.options || [];
@@ -721,6 +745,17 @@ async function refreshActions(force = false) {
 
     const boardMsg = newestBoardDm(msgs);
     const board = boardMsg ? parseBoardDm(boardMsg.content) : null;
+    // ruling_1142 (4): resolve the tap card's row here, on the single poll
+    // fetch — the card renders boardBoundRow(), never prose.
+    if (board) {
+      for (const sess of board.sessions || []) {
+        for (const q of (sess && sess.questions) || []) {
+          if (q && boardObligationId(q) != null && q.card != null && !q.row) {
+            q.row = await boardBoundRow(q);
+          }
+        }
+      }
+    }
     _you = { grouped: dedupeYou({ questions, overdue, ready, assigned }, board), board };
     renderYou();
     setStatus("");
@@ -2013,15 +2048,19 @@ const apiBoardObligationClose = (id, outcome, evidence) =>
 // verbatim. Throws on a failed close so the caller reports an error instead
 // of "sent".
 async function sendBoardDecisionAndClose(question, reply, outcome = "pass") {
-  const sent = await sendBoardDecision(question, reply);
+  // ruling_1142 (2): the tap closes the row DIRECTLY with the commander's
+  // SSO session, citing the bound ask id as evidence (ask:<id> is the ref
+  // the gateway accepts for the tap); no relay is involved. The reply DM
+  // is still cited for the audit trail (and stays relayable by lab).
   const oid = boardObligationId(question);
+  const ask = (oid != null && question && question.card != null)
+    ? await boardAskMessage(question.card, oid) : null;
+  const sent = await sendBoardDecision(question, reply, ask);
   if (oid == null) return { sent, closed: null };
   const dmId = sent && sent.id != null ? sent.id : "";
   const evidence =
     `Board answer sent (DM #${dmId}): ${reply}` +
-    // card #291: cite the decision DM for the gateway relay arm
-    // (relayed-from=msg:<id>). Inert when the SSO session closes directly
-    // as commander; load-bearing when anyone else relays this decision.
+    (ask && ask.id != null ? `\nask:${ask.id}` : "") +
     (dmId !== "" ? `\nrelayed-from=msg:${dmId}` : "");
   const closed = await apiBoardObligationClose(oid, outcome, evidence);
   return { sent, closed };
@@ -2045,7 +2084,8 @@ function boardFrictionReply(question) {
 }
 // Lab's ask FOR a row, by card + row id (structural: from lab-ovh to the
 // commander carrying the obligation_id — titles and prose never bind).
-async function boardAskForRow(cardId, oid) {
+// Returns the ask message (id + sender) or null.
+async function boardAskMessage(cardId, oid) {
   if (cardId == null || oid == null) return null;
   let msgs = [];
   try {
@@ -2054,6 +2094,10 @@ async function boardAskForRow(cardId, oid) {
   } catch (e) { return null; }
   const ask = (msgs || []).find((m) => m && m.from_node === "lab-ovh" &&
     m.to_node === "commander" && m.obligation_id === oid);
+  return ask && ask.id != null ? ask : null;
+}
+async function boardAskForRow(cardId, oid) {
+  const ask = await boardAskMessage(cardId, oid);
   return ask && ask.id != null ? ask.id : null;
 }
 // The ask id a tap answers, or null when the question binds to no ask (no
