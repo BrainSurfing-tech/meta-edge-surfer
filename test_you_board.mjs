@@ -40,6 +40,7 @@ const ctx = {
 vm.createContext(ctx);
 vm.runInContext(
   `${extract("boardEnvelope")}\n${extract("parseBoardDm")}\n${extract("newestBoardDm")}\n` +
+  `${extract("boardSentRecord")}\n${extract("boardQuestionOffered")}\n${extract("boardBuckets")}\n` +
   `${extract("visibleInbox")}\n${extract("dedupeYou")}\n${extract("questionSendControl")}\n` +
   `async function api(path, opts = {}) {\n` +
   `  const url = state.base.replace(/\\/$/, "") + path;\n` +
@@ -83,7 +84,45 @@ const newest = { id: 4, from_node: "lab-ovh", content: body };
 const plain = { id: 3, from_node: "science-claude", kind: "question", content: "Ship the gateway?", read_at: null };
 
 const picked = ctx.newestBoardDm([older, newerOther, newest, plain]);
-assert.equal(picked.id, 4, "newest board DM is the latest one from lab-ovh");
+assert.equal(picked.id, 4, "newest board DM is the latest one from an accepted sender");
+
+// card #1018 / #1194: the publisher has sent as board-publisher since 09-30.
+// A SWARPH-BOARD v1 DM from that sender, with one offered question, is the
+// board the You tab renders — the question lands in the decidable group
+// ("Your call") with its options. A board DM from any other sender is ignored.
+// >>> RED on main 5c3cf40: newestBoardDm accepted only from_node === "lab-ovh",
+// so the publisher DM was dropped and Your call never rendered. <<<
+const publisherBoard = {
+  sessions: [{
+    name: "lab-ovh",
+    questions: [{
+      id: "obl-pub",
+      title: "Ship the gateway?",
+      options: [
+        { label: "Yes", text: "yes", rec: true },
+        { label: "No", text: "no", rec: false },
+      ],
+    }],
+  }],
+};
+const publisherBody = "SWARPH-BOARD v1\n" + JSON.stringify(publisherBoard);
+const fromPublisher = { id: 20, from_node: "board-publisher", content: publisherBody };
+const fromStranger = { id: 21, from_node: "drop-on-meta-edge", content: publisherBody };
+const pickedPublisher = ctx.newestBoardDm([fromStranger, fromPublisher]);
+assert.ok(pickedPublisher, "a board DM from board-publisher is accepted");
+assert.equal(pickedPublisher.id, 20);
+const buckets = ctx.boardBuckets(ctx.parseBoardDm(pickedPublisher.content));
+assert.equal(buckets.decidable.length, 1, "the offered question is in Your call");
+assert.equal(
+  buckets.decidable[0].q.options.map((o) => o.label).join(","),
+  "Yes,No",
+  "Your call renders that question's options");
+assert.equal(
+  ctx.newestBoardDm([fromStranger]), null,
+  "a board DM from any other sender is still ignored");
+assert.equal(
+  ctx.newestBoardDm([{ id: 30, from_node: "lab-ovh", content: publisherBody }]).id,
+  30, "lab-ovh is still an accepted board sender");
 assert.equal(ctx.parseBoardDm(picked.content).sessions[0].name, "science-claude");
 
 const visible = ctx.visibleInbox([newest, plain, { id: 8, content: "hello" }]);
