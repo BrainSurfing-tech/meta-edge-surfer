@@ -1363,19 +1363,32 @@ async function claimPendingInvite() {
 }
 
 // ---------- poll loop ----------
+// card #1018: ONE timer, gated on visibility — a hidden page (phone locked,
+// background tab) fires nothing, so there is no polling while hidden and no
+// second setInterval to double-fire the 30 s clause.
 function startPollLoop() {
   if (state.pollTimer) clearInterval(state.pollTimer);
   if (!state.token) return;
   const tick = () => {
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
     if ($("#view-inbox")?.classList.contains("active")) refreshInbox();
     if ($("#view-actions")?.classList.contains("active")) refreshActions();
   };
   tick();
   state.pollTimer = setInterval(tick, state.pollSec * 1000);
 }
+// card #1018: returning to the foreground refreshes the active view at once
+// instead of waiting out the rest of the interval.
+function handleVisibilityChange() {
+  if (typeof document === "undefined" || document.visibilityState !== "visible") return;
+  if ($("#view-actions")?.classList.contains("active")) refreshActions();
+  else if ($("#view-inbox")?.classList.contains("active")) refreshInbox();
+}
 
 // ---------- wire ----------
 window.addEventListener("DOMContentLoaded", async () => {
+  // card #1018: refresh the active view at once on return to foreground.
+  document.addEventListener("visibilitychange", handleVisibilityChange);
   $("#nav-toggle")?.addEventListener("click", () => toggleNav());
   $$(".tab").forEach(t => t.addEventListener("click", () => {
     showView(t.dataset.view);
