@@ -131,7 +131,50 @@ function load(ctx) {
   assert.equal(ctx.inbox, 1);
 }
 
-// 5. an unchanged payload does not re-render.
+// 5. fire visibilitychange while hidden: zero refreshes.
+{
+  const ctx = sandbox();
+  load(ctx);
+  ctx._visible = false;
+  ctx.startPollLoop();
+  ctx.advance(60000);
+  ctx.fireVisibility();
+  ctx.advance(60000);
+  assert.equal(ctx.actions, 0, "RED: refresh on a hidden visibilitychange");
+  assert.equal(ctx.inbox, 0);
+}
+
+// 6. the tick's own refresh skips an unchanged payload: wire the real
+// refreshActions into the tick, so a forced refresh in the tick turns red.
+{
+  const payload = { messages: [], cards: [] };
+  const ctx = sandbox();
+  ctx.selfNode = () => "commander";
+  ctx.setStatus = () => {};
+  ctx.renders = 0;
+  ctx.renderActions = () => { ctx.renders++; };
+  ctx.api = async () => JSON.parse(JSON.stringify(payload));
+  ctx.newestBoardDm = () => null;
+  ctx.parseBoardDm = () => null;
+  ctx.dedupeYou = (g) => g;
+  ctx._CLOSED_STAGES = new Set(["done", "parked"]);
+  vm.createContext(ctx);
+  vm.runInContext(
+    `let _you = null;\nlet _youSig = null;\n` +
+    `function renderYou() { if (!_you) return; renderActions({}); }\n` +
+    `${extract("refreshActions")}`,
+    ctx);
+  // The tick resolves refreshActions to the real one above: four timer
+  // firings with an identical payload must render exactly once — a forced
+  // refresh in the tick would render four times and turn this red.
+  load(ctx);
+  ctx.startPollLoop();
+  ctx.advance(90000);
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(ctx.renders, 1, "RED: tick re-renders an unchanged payload");
+}
+
+// 7. an unchanged payload does not re-render.
 {
   const payload = { messages: [], cards: [] };
   const ctx = sandbox();
