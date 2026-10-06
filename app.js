@@ -535,7 +535,7 @@ async function sendBoardDecision(question, reply, askMsg) {
   return apiSend(to, "answer", reply, ["lab-ovh"], thread, replyTo);
 }
 
-async function deliverBoardDecision(button, question, reply, label) {
+async function deliverBoardDecision(button, question, reply, label, outcome = "pass") {
   if (!button || button.disabled) return;
   button.disabled = true;
   const err = button.parentElement && button.parentElement.querySelector
@@ -546,7 +546,7 @@ async function deliverBoardDecision(button, question, reply, label) {
     // Sends the DM, and closes the carried obligation when there is one.
     // A failed close throws: nothing below runs, so a failed close is an
     // error on the row, never a "sent" report.
-    const { sent: r } = await sendBoardDecisionAndClose(question, reply);
+    const { sent: r } = await sendBoardDecisionAndClose(question, reply, outcome);
     const id = r && r.id != null ? r.id : "";
     const rec = { id, label: label || "", at: new Date().toISOString() };
     rememberBoardSent(question && question.id, rec);
@@ -614,6 +614,20 @@ function _boardQuestion(question, sess) {
     }
     li.appendChild(primary);
     if (!question.row) return li;
+    // ruling_1157 (1): rows on other steps show NO buttons — answer with
+    // the full close form. Their options render display-only (no inputs).
+    if (!boardTapClosable(question.row)) {
+      const form = document.createElement("div");
+      form.className = "action-secondary";
+      form.textContent = "answer with the full close form";
+      li.appendChild(form);
+      const shown = document.createElement("div");
+      shown.className = "action-primary";
+      shown.textContent = (question.options || [])
+        .map((o) => o.label || "").filter(Boolean).join(" / ");
+      li.appendChild(shown);
+      return li;
+    }
   } else {
     const title = document.createElement("div");
     title.className = "action-primary";
@@ -672,19 +686,32 @@ function _boardQuestion(question, sess) {
   btn.addEventListener("click", () => {
     const picked = li.querySelector("input:checked");
     const opt = (picked && options[+picked.value]) || {};
+    const optText = opt.text || opt.label || "";
     const note = box.value.trim();
-    // card #291: a yes/no tap on a friction pair goes through the friction
-    // helper (bare word, in-thread, close cites it); anything with a note
-    // takes the normal path.
+    // ruling_1157 (1): the tapped option maps to its outcome explicitly. A
+    // friction side closes with its outcome (with a note it rides the
+    // normal path, but the SIDE still decides pass/fail). A non-side pick
+    // on an obligation question is display-only: it closes nothing.
     const side = (typeof boardFrictionTap === "function")
-      ? boardFrictionTap(question, opt.text || opt.label || "", note)
+      ? boardFrictionTap(question, optText, "")
       : null;
-    if (side) {
-      deliverFrictionReply(btn, question, side, opt.label || "");
+    const oid = boardObligationId(question);
+    if (!side && oid != null) {
+      err.textContent = "this option is display-only and closes nothing";
       return;
     }
-    deliverBoardDecision(btn, question,
-      (opt.text || opt.label || "") + (note ? "\n" + note : ""), opt.label || "");
+    if (!side) {
+      deliverBoardDecision(btn, question,
+        optText + (note ? "\n" + note : ""), opt.label || "");
+      return;
+    }
+    const outcome = side === "yes" ? "pass" : "fail";
+    if (note) {
+      deliverBoardDecision(btn, question, optText + "\n" + note,
+        opt.label || "", outcome);
+      return;
+    }
+    deliverFrictionReply(btn, question, side, opt.label || "");
   });
   const err = document.createElement("p");
   err.className = "board-send-err";
@@ -2117,6 +2144,11 @@ async function boardBoundRow(question) {
     rows = (res && res.obligations) || [];
   } catch (e) { return null; }
   return (rows || []).find((o) => o && o.id === oid) || null;
+}
+// ruling_1157 (1): tap-closable steps — build and step-less rows only.
+// Validate/plan-review rows answer with the full close form.
+function boardTapClosable(row) {
+  return !!row && (!row.step || row.step === "build");
 }
 // The You tab shows this for a bound ask: id/card/step/accept/holder.
 function boardRowLabel(row) {
