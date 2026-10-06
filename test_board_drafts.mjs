@@ -300,3 +300,22 @@ assert.equal(calls.length, 0, "RED: a prose option closes nothing");
 assert.ok(proseCard.querySelector(".board-send-err").textContent.includes("display-only"));
 
 console.log("tap outcome mapping tests: 3 passed");
+
+// Publisher-stamped outcomes (yes=pass, no=fail) map the same way.
+const stampedCard = ctx._boardQuestion(
+  { id: "obl-291f", title: "Close it?", to_node: "commander", card: 7,
+    obligation: 291, row: buildRow,
+    options: [{ label: "Yes", text: "yes", outcome: "pass" },
+              { label: "No", text: "no", outcome: "fail" }] }, labSess);
+const stampedInputs = inputsOf(stampedCard);
+stampedInputs[1].checked = true;
+stampedInputs[0].checked = false;
+stampedInputs[1].fire("change");
+calls.length = 0;
+btnOf(stampedCard).fire("click");
+await flush();
+const stampedClose = JSON.parse(calls.find((c) => String(c.url).endsWith("/close")).body);
+assert.equal(stampedClose.outcome, "fail",
+  "RED: the stamped option maps to its outcome explicitly");
+
+console.log("stamped outcome tests: passed");

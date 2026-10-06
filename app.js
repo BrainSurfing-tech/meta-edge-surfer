@@ -688,13 +688,16 @@ function _boardQuestion(question, sess) {
     const opt = (picked && options[+picked.value]) || {};
     const optText = opt.text || opt.label || "";
     const note = box.value.trim();
-    // ruling_1157 (1): the tapped option maps to its outcome explicitly. A
+    // ruling_1157 (1): the tapped option maps to its outcome explicitly —
+    // the publisher stamps it (yes=pass, no=fail; prose carries none). A
     // friction side closes with its outcome (with a note it rides the
     // normal path, but the SIDE still decides pass/fail). A non-side pick
     // on an obligation question is display-only: it closes nothing.
     const side = (typeof boardFrictionTap === "function")
       ? boardFrictionTap(question, optText, "")
       : null;
+    const explicitOutcome =
+      (opt.outcome === "pass" || opt.outcome === "fail") ? opt.outcome : null;
     const oid = boardObligationId(question);
     if (!side && oid != null) {
       err.textContent = "this option is display-only and closes nothing";
@@ -705,7 +708,7 @@ function _boardQuestion(question, sess) {
         optText + (note ? "\n" + note : ""), opt.label || "");
       return;
     }
-    const outcome = side === "yes" ? "pass" : "fail";
+    const outcome = explicitOutcome || (side === "yes" ? "pass" : "fail");
     if (note) {
       deliverBoardDecision(btn, question, optText + "\n" + note,
         opt.label || "", outcome);
