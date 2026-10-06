@@ -47,7 +47,7 @@ vm.runInContext(
   `  if (opts.body) headers["Content-Type"] = "application/json";\n` +
   `  const res = await fetch(url, { ...opts, headers });\n` +
   `  return res.json();\n` +
-  `}\n${apiSendSrc}\n${extract("boardObligationId")}\n${extract("sendBoardDecision")}\n`,
+  `}\n${apiSendSrc}\n${extract("boardObligationId")}\n${extract("boardAskForRow")}\n${extract("boardAskId")}\n${extract("sendBoardDecision")}\n`,
   ctx);
 
 const board = {
@@ -116,7 +116,8 @@ assert.equal(req.url, "http://stub.invalid/messages");
 const payload = JSON.parse(req.body);
 assert.equal(payload.to_node, "science-claude");
 assert.equal(payload.kind, "answer");
-assert.equal(payload.content, "Re: Ship the gateway?\nYes, ship");
+assert.equal(payload.content, "Yes, ship",
+  "ruling_1138_structured: the tap sends ONLY the word — no Re: line");
 assert.deepEqual(payload.cc, ["lab-ovh"]);
 assert.equal(req.headers.Authorization, "Bearer tok");
 
@@ -162,7 +163,7 @@ vm.runInContext(
   `  const res = await fetch(url, { ...opts, headers });\n` +
   `  if (!res.ok) throw new Error(res.status + " " + res.statusText);\n` +
   `  return res.json();\n` +
-  `}\n${apiSendSrc}\n${extract("boardObligationId")}\n${extract("sendBoardDecision")}\n` +
+  `}\n${apiSendSrc}\n${extract("boardObligationId")}\n${extract("boardAskForRow")}\n${extract("boardAskId")}\n${extract("sendBoardDecision")}\n` +
   `${extract("boardSentRecord")}\n${extract("rememberBoardSent")}\n` +
   `${extract("boardQuestionOffered")}\n${extract("boardSentText")}\n${extract("fmtTime")}\n` +
   `${draftsDecl}\n${extract("boardDraftKey")}\n${extract("boardDraftSave")}\n` +

@@ -311,7 +311,7 @@ const apiPeers = () => api("/peers");
 const apiInbox = (limit = 50) =>
   api(`/messages?to=${encodeURIComponent(selfNode())}&limit=${limit}`);
 const apiAll = (limit = 200) => api(`/messages?limit=${limit}`);
-const apiSend = (to_node, kind, content, cc, thread_id) => {
+const apiSend = (to_node, kind, content, cc, thread_id, reply_to) => {
   const payload = cc && cc.length
     ? { from_node: selfNode(), to_node, kind, content, cc }
     : { from_node: selfNode(), to_node, kind, content };
@@ -319,8 +319,18 @@ const apiSend = (to_node, kind, content, cc, thread_id) => {
   // that same thread, so a friction yes/no resolves to the ask (gateway
   // relay arm). Absent thread -> the older keyless shape, unchanged.
   if (thread_id != null && thread_id !== "") payload.thread_id = thread_id;
+  // ruling_1138_structured: reply_to names lab's ask for the row — the
+  // structural bind. Absent -> the keyless shape, unchanged.
+  if (reply_to != null) payload.reply_to = reply_to;
   return api("/messages", { method: "POST", body: JSON.stringify(payload) });
 };
+// Lab's ask for a row, found structurally (never parsed): the ask is
+// lab-ovh's DM to the commander carrying the row's obligation_id.
+const apiBoardThread = (cardId, limit = 50) =>
+  api(`/board/cards/${encodeURIComponent(cardId)}/thread?limit=${limit}`);
+const apiBoardObligations = (cardId) =>
+  api(cardId == null ? "/board/obligations"
+      : `/board/obligations?card_id=${encodeURIComponent(cardId)}`);
 const apiSchedEvents = () => api("/scheduled-events");
 const apiSchedToggle = (name, enable) =>
   api(`/scheduled-events/${encodeURIComponent(name)}/${enable ? "enable" : "disable"}`,
@@ -508,16 +518,14 @@ function youCount(groups) {
   return ACTION_GROUPS.reduce((n, g) => n + (g.count ? (groups[g.key] || []).length : 0), 0);
 }
 
-function sendBoardDecision(question, reply) {
-  // card #291: carry the ask thread when the question has one, so the reply
-  // DM is usable as a relayed-from reference on the gateway relay arm.
-  // ruling_1135_binding: the Re: line names the row ('obligation #N') so the
-  // gateway binds the reply to THIS row, never the card thread.
+async function sendBoardDecision(question, reply) {
+  // card #291 / ruling_1138_structured: the tap sends ONLY the word — no Re:
+  // line, no row id in prose. Binding is structural: reply_to names lab's
+  // ask for the row (looked up, never parsed). Without a bound ask there is
+  // no reply_to and the gateway refuses to bind the reply.
   const thread = question ? (question.thread || null) : null;
-  const oid = question ? boardObligationId(question) : null;
-  const subject = "Re: " + question.title +
-    (oid != null ? ` (obligation #${oid})` : "");
-  return apiSend(question.to_node, "answer", subject + "\n" + reply, ["lab-ovh"], thread);
+  const replyTo = await boardAskId(question);
+  return apiSend(question.to_node, "answer", reply, ["lab-ovh"], thread, replyTo);
 }
 
 async function deliverBoardDecision(button, question, reply, label) {
@@ -684,15 +692,19 @@ async function refreshActions(force = false) {
   const me = selfNode();
   try {
     setStatus("loading actions…");
-    const [msgRes, cardRes] = await Promise.all([
+    const [msgRes, cardRes, oblRes] = await Promise.all([
       api(`/messages?to_node=${encodeURIComponent(me)}&limit=200`),
       api(`/board/cards?limit=500`),
+      api("/board/obligations"),
     ]);
-    const sig = JSON.stringify([msgRes, cardRes]);
+    const sig = JSON.stringify([msgRes, cardRes, oblRes]);
     if (!force && sig === _youSig) { setStatus(""); return; }
     _youSig = sig;
     const msgs  = msgRes.messages || [];
     const cards = cardRes.cards || [];
+    // ruling_1138_structured (6): pin each ask to its bound row's board
+    // fields, so the tab shows the row — never the ask prose.
+    attachBoundRows(msgs, (oblRes && oblRes.obligations) || []);
 
     // A question is "waiting" only if unread. read_at is the gateway's own
     // consumed-flag; do NOT infer from anything else.
@@ -751,6 +763,11 @@ function _youRow(key, it) {
     return li;
   }
   if (it.kind === "question") {
+    // A bound ask shows its row's board fields (id/card/step/accept/holder)
+    // — the ask prose is never rendered.
+    if (it.row) {
+      return _actionRow(boardRowLabel(it.row), `from ${it.from_node} · #${it.id}`, it.created_at);
+    }
     return _actionRow(it.content || "", `from ${it.from_node} · #${it.id}`, it.created_at);
   }
   const meta = [it.stage, it.assignee ? `@${it.assignee}` : null,
@@ -2001,7 +2018,7 @@ async function sendBoardDecisionAndClose(question, reply, outcome = "pass") {
   if (oid == null) return { sent, closed: null };
   const dmId = sent && sent.id != null ? sent.id : "";
   const evidence =
-    `Board answer sent (DM #${dmId}): Re: ${question.title}\n${reply}` +
+    `Board answer sent (DM #${dmId}): ${reply}` +
     // card #291: cite the decision DM for the gateway relay arm
     // (relayed-from=msg:<id>). Inert when the SSO session closes directly
     // as commander; load-bearing when anyone else relays this decision.
@@ -2013,8 +2030,8 @@ async function sendBoardDecisionAndClose(question, reply, outcome = "pass") {
 
 // ---------- commander relay close (#291) ----------
 // A friction question is a bare yes/no pair: the tap sends exactly "yes" or
-// "no" (the gateway friction rule matches ^yes\b / ^no\b) in the ask thread,
-// so the reply DM resolves to the thread parent on the relay arm.
+// "no" with reply_to set to lab's ask for the row, in the ask thread — the
+// gateway binds the reply structurally on the relay arm.
 const _FRICTION_YES = /^\s*y(es|eah|ep)?\s*$/i;
 const _FRICTION_NO = /^\s*n(o|ope)?\s*$/i;
 function boardFrictionReply(question) {
@@ -2025,6 +2042,58 @@ function boardFrictionReply(question) {
   const noIdx = texts.findIndex((t) => _FRICTION_NO.test(t));
   if (yesIdx < 0 || noIdx < 0 || yesIdx === noIdx) return null;
   return { yes: texts[yesIdx], no: texts[noIdx] };
+}
+// Lab's ask FOR a row, by card + row id (structural: from lab-ovh to the
+// commander carrying the obligation_id — titles and prose never bind).
+async function boardAskForRow(cardId, oid) {
+  if (cardId == null || oid == null) return null;
+  let msgs = [];
+  try {
+    const thread = await apiBoardThread(cardId);
+    msgs = (thread && (thread.messages || thread.posts || thread.thread)) || [];
+  } catch (e) { return null; }
+  const ask = (msgs || []).find((m) => m && m.from_node === "lab-ovh" &&
+    m.to_node === "commander" && m.obligation_id === oid);
+  return ask && ask.id != null ? ask.id : null;
+}
+// The ask id a tap answers, or null when the question binds to no ask (no
+// fetch at all then — the older keyless shape is untouched).
+async function boardAskId(question) {
+  const oid = boardObligationId(question);
+  if (oid == null || !question || question.card == null) return null;
+  return boardAskForRow(question.card, oid);
+}
+// The bound row's board fields (never the ask prose), or null.
+async function boardBoundRow(question) {
+  const oid = boardObligationId(question);
+  if (oid == null || !question || question.card == null) return null;
+  let rows = [];
+  try {
+    const res = await apiBoardObligations(question.card);
+    rows = (res && res.obligations) || [];
+  } catch (e) { return null; }
+  return (rows || []).find((o) => o && o.id === oid) || null;
+}
+// The You tab shows this for a bound ask: id/card/step/accept/holder.
+function boardRowLabel(row) {
+  if (!row) return "";
+  const parts = [`obligation #${row.id}`];
+  if (row.card_id != null) parts.push(`card #${row.card_id}`);
+  parts.push(row.step || "unstepped");
+  if (row.accept) parts.push(String(row.accept));
+  if (row.holder) parts.push(`@${row.holder}`);
+  return parts.join(" · ");
+}
+// Pin each ask message to its bound row (by obligation_id); prose-only
+// messages pass through untouched.
+function attachBoundRows(questions, obligations) {
+  const byId = new Map(((obligations) || []).map((o) => [o && o.id, o]));
+  for (const m of questions || []) {
+    if (m && m.obligation_id != null && byId.has(m.obligation_id)) {
+      m.row = byId.get(m.obligation_id);
+    }
+  }
+  return questions;
 }
 // One tap for a friction question: the bare word goes in-thread via the same
 // send + tap-close path, so the existing Sent/draft/count behaviour holds.

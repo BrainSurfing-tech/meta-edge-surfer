@@ -162,7 +162,7 @@ function load(ctx) {
   vm.runInContext(
     `let _you = null;\nlet _youSig = null;\n` +
     `function renderYou() { if (!_you) return; renderActions({}); }\n` +
-    `${extract("refreshActions")}`,
+    `${extract("attachBoundRows")}\n${extract("refreshActions")}`,
     ctx);
   // The tick resolves refreshActions to the real one above: four timer
   // firings with an identical payload must render exactly once — a forced
@@ -191,7 +191,7 @@ function load(ctx) {
   vm.runInContext(
     `let _you = null;\nlet _youSig = null;\n` +
     `function renderYou() { if (!_you) return; renderActions({}); }\n` +
-    `${extract("refreshActions")}`,
+    `${extract("attachBoundRows")}\n${extract("refreshActions")}`,
     ctx);
   await ctx.refreshActions();
   await ctx.refreshActions();
