@@ -311,14 +311,16 @@ const apiPeers = () => api("/peers");
 const apiInbox = (limit = 50) =>
   api(`/messages?to=${encodeURIComponent(selfNode())}&limit=${limit}`);
 const apiAll = (limit = 200) => api(`/messages?limit=${limit}`);
-const apiSend = (to_node, kind, content, cc) =>
-  api("/messages", {
-    method: "POST",
-    body: JSON.stringify(
-      cc && cc.length
-        ? { from_node: selfNode(), to_node, kind, content, cc }
-        : { from_node: selfNode(), to_node, kind, content }),
-  });
+const apiSend = (to_node, kind, content, cc, thread_id) => {
+  const payload = cc && cc.length
+    ? { from_node: selfNode(), to_node, kind, content, cc }
+    : { from_node: selfNode(), to_node, kind, content };
+  // card #291: the answer to a board question asked in-thread must post in
+  // that same thread, so a friction yes/no resolves to the ask (gateway
+  // relay arm). Absent thread -> the older keyless shape, unchanged.
+  if (thread_id != null && thread_id !== "") payload.thread_id = thread_id;
+  return api("/messages", { method: "POST", body: JSON.stringify(payload) });
+};
 const apiSchedEvents = () => api("/scheduled-events");
 const apiSchedToggle = (name, enable) =>
   api(`/scheduled-events/${encodeURIComponent(name)}/${enable ? "enable" : "disable"}`,
@@ -507,7 +509,10 @@ function youCount(groups) {
 }
 
 function sendBoardDecision(question, reply) {
-  return apiSend(question.to_node, "answer", "Re: " + question.title + "\n" + reply, ["lab-ovh"]);
+  // card #291: carry the ask thread when the question has one, so the reply
+  // DM is usable as a relayed-from reference on the gateway relay arm.
+  const thread = question ? (question.thread || null) : null;
+  return apiSend(question.to_node, "answer", "Re: " + question.title + "\n" + reply, ["lab-ovh"], thread);
 }
 
 async function deliverBoardDecision(button, question, reply, label) {
@@ -1980,8 +1985,38 @@ async function sendBoardDecisionAndClose(question, reply) {
   if (oid == null) return { sent, closed: null };
   const dmId = sent && sent.id != null ? sent.id : "";
   const evidence =
-    `Board answer sent (DM #${dmId}): Re: ${question.title}\n${reply}`;
+    `Board answer sent (DM #${dmId}): Re: ${question.title}\n${reply}` +
+    // card #291: cite the decision DM for the gateway relay arm
+    // (relayed-from=msg:<id>). Inert when the SSO session closes directly
+    // as commander; load-bearing when anyone else relays this decision.
+    (dmId !== "" ? `\nrelayed-from=msg:${dmId}` : "");
   const closed = await apiBoardObligationClose(oid, "pass", evidence);
   return { sent, closed };
 }
 // ---------- end board close (#983) ----------
+
+// ---------- commander relay close (#291) ----------
+// A friction question is a bare yes/no pair: the tap sends exactly "yes" or
+// "no" (the gateway friction rule matches ^yes\b / ^no\b) in the ask thread,
+// so the reply DM resolves to the thread parent on the relay arm.
+const _FRICTION_YES = /^\s*y(es|eah|ep)?\s*$/i;
+const _FRICTION_NO = /^\s*n(o|ope)?\s*$/i;
+function boardFrictionReply(question) {
+  const options = (question && question.options) || [];
+  if (options.length !== 2) return null;
+  const texts = options.map((o) => String((o && o.text) || (o && o.label) || ""));
+  const yesIdx = texts.findIndex((t) => _FRICTION_YES.test(t));
+  const noIdx = texts.findIndex((t) => _FRICTION_NO.test(t));
+  if (yesIdx < 0 || noIdx < 0 || yesIdx === noIdx) return null;
+  return { yes: texts[yesIdx], no: texts[noIdx] };
+}
+// One tap for a friction question: the bare word goes in-thread via the same
+// send + tap-close path, so the existing Sent/draft/count behaviour holds.
+async function sendFrictionReply(question, which) {
+  const friction = boardFrictionReply(question);
+  if (!friction || (which !== "yes" && which !== "no")) {
+    throw new Error("not a friction question");
+  }
+  return sendBoardDecisionAndClose(question, friction[which]);
+}
+// ---------- end commander relay close (#291) ----------
