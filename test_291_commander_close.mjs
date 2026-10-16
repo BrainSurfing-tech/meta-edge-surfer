@@ -299,15 +299,23 @@ assert.equal(await ctx.boardAskMessage(7, 12345), null);
 assert.equal(await ctx.boardAskMessage(null, 291), null);
 ctx.calls.length = 0;
 const unbound = await ctx.sendBoardDecisionAndClose(
-  { id: "obl-9", title: "Hold?", to_node: "commander",
+  { id: "obl-9", title: "Hold?", to_node: "lab-ovh",
     thread: "ask-thread-uuid-9", obligation: 999 }, "yes");
 assert.equal(unbound.closed.status, "closed");
 assert.equal(ctx.calls.length, 2, "no ask lookup without a card: send + close");
 assert.equal(JSON.parse(ctx.calls[0].body).reply_to, undefined);
 assert.ok(!JSON.parse(ctx.calls[1].body).evidence.includes("ask:"),
   "RED: an unbound tap cites no ask");
-assert.equal(JSON.parse(ctx.calls[0].body).to_node, "commander",
-  "no ask sender known: the older address shape is untouched");
+assert.equal(JSON.parse(ctx.calls[0].body).to_node, "lab-ovh",
+  "no ask sender known: the question's to_node is the address");
+// card #1197: this step used to pin to_node "commander" here, which is the
+// viewer's own node — the self-DM the commander measured. It now refuses:
+// no DM, no close.
+ctx.calls.length = 0;
+await assert.rejects(ctx.sendBoardDecisionAndClose(
+  { id: "obl-9", title: "Hold?", to_node: "commander",
+    thread: "ask-thread-uuid-9", obligation: 999 }, "yes"), /would go to you/);
+assert.equal(ctx.calls.length, 0, "a self-addressed tap sends and closes nothing");
 
 // 10. ruling_1142 (4): refreshActions resolves each tap card's row via
 // boardBoundRow on the single poll fetch.
