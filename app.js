@@ -537,6 +537,16 @@ async function sendBoardDecision(question, reply, askMsg) {
     : ((oid != null && question && question.card != null)
       ? await boardAskMessage(question.card, oid) : null);
   const to = (ask && ask.from_node) || (question && question.to_node);
+  // card #1197: never answer to nobody, and never to yourself. A
+  // commander-held row used to arrive to_node=commander, so the fallback
+  // above DMed the commander's answer to the commander, with no reply_to,
+  // and the asking cell never saw it. Refused here, before any send.
+  if (!to) {
+    throw new Error("this question names no recipient — nothing was sent");
+  }
+  if (to === selfNode()) {
+    throw new Error(`this answer would go to you (${to}) — nothing was sent`);
+  }
   const replyTo = ask && ask.id != null ? ask.id : null;
   return apiSend(to, "answer", reply, ["lab-ovh"], thread, replyTo);
 }
@@ -697,21 +707,25 @@ function _boardQuestion(question, sess) {
     // ruling_1157 (1): the tapped option maps to its outcome explicitly —
     // the publisher stamps it (yes=pass, no=fail; prose carries none). A
     // friction side closes with its outcome (with a note it rides the
-    // normal path, but the SIDE still decides pass/fail). A non-side pick
-    // on an obligation question is display-only: it closes nothing.
+    // normal path, but the SIDE still decides pass/fail). card #1197: a
+    // non-side pick with a stamped outcome (a choice such as "extend")
+    // closes its row with that outcome, and the DM and the close evidence
+    // carry the chosen text. A non-side pick with no outcome on an
+    // obligation question is display-only: it closes nothing.
     const side = (typeof boardFrictionTap === "function")
       ? boardFrictionTap(question, optText, "")
       : null;
     const explicitOutcome =
       (opt.outcome === "pass" || opt.outcome === "fail") ? opt.outcome : null;
     const oid = boardObligationId(question);
-    if (!side && oid != null) {
+    if (!side && !explicitOutcome && oid != null) {
       err.textContent = "this option is display-only and closes nothing";
       return;
     }
     if (!side) {
       deliverBoardDecision(btn, question,
-        optText + (note ? "\n" + note : ""), opt.label || "");
+        optText + (note ? "\n" + note : ""), opt.label || "",
+        explicitOutcome || undefined);
       return;
     }
     const outcome = explicitOutcome || (side === "yes" ? "pass" : "fail");
