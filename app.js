@@ -624,6 +624,13 @@ function _boardQuestion(question, sess) {
     const primary = document.createElement("div");
     primary.className = "action-primary";
     if (question.row) {
+      const asked = String(question.title || "").trim();
+      if (asked.endsWith("?")) {
+        const qline = document.createElement("div");
+        qline.className = "action-primary";
+        qline.textContent = asked;
+        li.appendChild(qline);
+      }
       primary.textContent = boardRowLabel(question.row);
     } else {
       primary.textContent = "row unavailable";
@@ -848,8 +855,14 @@ function _youRow(key, it) {
     return li;
   }
   if (it.kind === "question") {
-    // A bound ask shows its row's board fields (id/card/step/accept/holder)
-    // — the ask prose is never rendered.
+    // card #1206: an offer message's preview is the question, the text
+    // before the accept marker, not the row summary.
+    const question = offerQuestionText(it.content);
+    if (question) {
+      return _actionRow(question, `from ${it.from_node} · #${it.id}`, it.created_at);
+    }
+    // A bound ask with no offer question shows its row's board fields
+    // (id/card/step/accept/holder) — the ask prose is never rendered.
     if (it.row) {
       return _actionRow(boardRowLabel(it.row), `from ${it.from_node} · #${it.id}`, it.created_at);
     }
@@ -2347,6 +2360,15 @@ async function boardBoundRow(question) {
 // Validate/plan-review rows answer with the full close form.
 function boardTapClosable(row) {
   return !!row && (!row.step || row.step === "build");
+}
+// card #1206. The question on an offer message, or "" when the
+// accept marker is absent. The row summary stays the fallback.
+function offerQuestionText(content) {
+  const text = String(content || "");
+  const mark = "\n\nACCEPT CHECK:";
+  const at = text.indexOf(mark);
+  if (at < 0) return "";
+  return text.slice(0, at).trim();
 }
 // The You tab shows this for a bound ask: id/card/step/accept/holder.
 function boardRowLabel(row) {
