@@ -480,3 +480,8 @@ details.action-group > summary h3 { display: inline-flex; }
 .tools-act .btn-primary, .tools-act .btn-secondary { flex: none; }
 #tools-card-detail h4, #tools-channel-detail h4 { margin: .7rem .8rem .2rem; }
 #tools-card-detail p { margin: .2rem .8rem; overflow-wrap: anywhere; }
+/* card #1201: step graph lines and the Confirm flow result. An error carries
+   the gateway's detail in full, so it wraps instead of clipping. */
+.tools-steps li { overflow-wrap: anywhere; cursor: default; }
+.tools-act > span { display: inline-flex; align-items: center; font-weight: 600; }
+#tools-card-detail .tools-err { color: var(--danger); white-space: pre-wrap; }

@@ -52,6 +52,9 @@ async function __drive() {
   await __step("ready-clear", () => apiToolsReady(7, false));
   await __step("due", () => apiToolsDue(7, "2026-10-05T14:00:00+00:00"));
   await __step("due-clear", () => apiToolsDue(7, ""));
+  await __step("graph", () => apiToolsCardGraph(7));
+  await __step("flow-confirm", () => apiToolsFlowConfirm(7, { review: "gpu-wsl" }, "ship"));
+  await __step("flow-confirm-bare", () => apiToolsFlowConfirm(7, {}, ""));
   await __step("comment", () => apiToolsComment({ id: 7, thread_uuid: "thr-1", assignee: "lab-ovh" }, "hi"));
   await __step("channels", () => apiToolsChannels());
   await __step("join", () => apiToolsJoin("ops", "all"));
@@ -96,6 +99,11 @@ eq("due", "http://stub.invalid/board/cards/7", "PATCH",
   { actor: "commander", due_at: "2026-10-05T14:00:00+00:00" });
 eq("due-clear", "http://stub.invalid/board/cards/7", "PATCH",
   { actor: "commander", due_at: "" });
+eq("graph", "http://stub.invalid/board/cards/7/graph");
+eq("flow-confirm", "http://stub.invalid/board/cards/7/flow/confirm", "POST",
+  { actor: "commander", holders: { review: "gpu-wsl" }, what: "ship" });
+eq("flow-confirm-bare", "http://stub.invalid/board/cards/7/flow/confirm", "POST",
+  { actor: "commander", holders: {} });
 eq("comment", "http://stub.invalid/messages", "POST",
   { from_node: "commander", to_node: "lab-ovh", kind: "status",
     content: "hi", thread_uuid: "thr-1" });
@@ -121,10 +129,10 @@ assert.ok(html.includes("Cards") && html.includes("Channels") && html.includes("
 assert.ok(/min-height:\s*(44px|var\(--tap\))/.test(css), "44px tap-target rule missing");
 
 // ---- every UI write confirm()s first (move/assign/ready/due-set/due-clear/
-// ---- comment/join/leave/say = 9 guards in the tools UI section) ----
+// ---- comment/join/leave/say/confirm-flow = 10 guards in the tools UI section) ----
 const uiSection = src.slice(src.indexOf(END));
 const confirms = (uiSection.match(/if\s*\(\s*!confirm\(/g) || []).length;
-assert.equal(confirms, 9, `expected 9 confirm guards in tools UI, got ${confirms}`);
+assert.equal(confirms, 10, `expected 10 confirm guards in tools UI, got ${confirms}`);
 
 // ---- #974: gateway thread shape {card_id, thread_uuid, messages:[...]} ----
 function extract2(name) {
