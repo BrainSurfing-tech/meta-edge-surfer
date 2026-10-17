@@ -1716,6 +1716,17 @@ const apiToolsMove = (id, stage) => apiToolsCardPatch(id, { stage });
 const apiToolsAssign = (id, peer) => apiToolsCardPatch(id, { assignee: peer });
 const apiToolsReady = (id, flag = true) => apiToolsCardPatch(id, { move_ready: flag });
 const apiToolsDue = (id, due_at) => apiToolsCardPatch(id, { due_at });
+// card #1201: the step graph (`swarph board cards graph`) and its confirm
+// (`cards confirm-flow`). `holders` names only the steps whose pick differs from
+// the derived default. `actor` rides along as on every PATCH here: under the
+// shared token an absent actor resolves to "anonymous", and an SSO caller with
+// no actor fails the caller binding.
+const apiToolsCardGraph = (id) => api(`/board/cards/${encodeURIComponent(id)}/graph`);
+const apiToolsFlowConfirm = (id, holders, what) =>
+  api(`/board/cards/${encodeURIComponent(id)}/flow/confirm`, {
+    method: "POST",
+    body: JSON.stringify({ actor: selfNode(), holders, ...(what ? { what } : {}) }),
+  });
 // Comment = exactly ONE request: the card is already open, so thread_uuid
 // and assignee come from the cached card, the way swarph-me cardsay reads
 // the card before posting.
@@ -1844,6 +1855,9 @@ async function openToolsCard(id) {
       }
       detail.append(ul);
     }
+    // Step graph + Confirm flow (card #1201). Loads on its own; a failure
+    // renders inside its own box and never takes the action rows down.
+    detail.append(toolsGraphSection(card.id));
     // Move — one PATCH.
     {
       const row = toolsActRow();
@@ -1967,6 +1981,154 @@ async function openToolsCard(id) {
     }
   } catch (e) { setStatus("card: " + e.message, "err"); }
 }
+
+// ---------- step graph + Confirm flow (card #1201) ----------
+// One line per menu step from GET /board/cards/{id}/graph, then the flow line.
+// Step, state and peer text comes from other cells: DOM APIs and textContent
+// only, never innerHTML.
+function toolsStepLine(st) {
+  const holder = st.row
+    ? (st.holder || "no holder")
+    : (st.default ? `default → ${st.default.holder || "none"}` : "—");
+  const parts = [st.step, st.mandatory ? "M" : "opt", st.state, holder];
+  // eligible is null where the gateway did not derive it; [] means nobody.
+  if (Array.isArray(st.eligible)) {
+    parts.push(`eligible: ${st.eligible.length ? st.eligible.join(", ") : "none"}`);
+  }
+  return parts.join(" · ");
+}
+
+function toolsGraphSection(cardId) {
+  const sec = document.createElement("div");
+  sec.className = "tools-graph";
+  const graphHost = document.createElement("div");
+  // The confirm result lives OUTSIDE graphHost: the re-fetch after a confirm
+  // replaces graphHost's children and must not wipe the minted ids with them.
+  const resultEl = document.createElement("div");
+  resultEl.className = "tools-flow-result";
+  const loading = document.createElement("p");
+  loading.className = "muted";
+  loading.textContent = "graph…";
+  graphHost.append(loading);
+  sec.append(graphHost, resultEl);
+  toolsLoadGraph(cardId, graphHost, resultEl);
+  return sec;
+}
+
+// Never throws: any failure, a malformed body included, renders as
+// "graph unavailable: <detail>" so the box is never blank.
+async function toolsLoadGraph(cardId, graphHost, resultEl) {
+  try {
+    const graph = await apiToolsCardGraph(cardId);
+    if (!graph || !Array.isArray(graph.steps) || !Array.isArray(graph.missing)) {
+      throw new Error("response has no steps[] or missing[]");
+    }
+    toolsRenderGraph(cardId, graph, graphHost, resultEl);
+  } catch (e) {
+    const p = document.createElement("p");
+    p.className = "tools-err";
+    p.textContent = `graph unavailable: ${e.message}`;
+    graphHost.replaceChildren(p);
+  }
+}
+
+function toolsRenderGraph(cardId, graph, graphHost, resultEl) {
+  const ul = document.createElement("ul");
+  ul.className = "msg-list tools-steps";
+  for (const st of graph.steps) {
+    const li = document.createElement("li");
+    li.textContent = toolsStepLine(st);
+    ul.append(li);
+  }
+  const missing = graph.missing;
+  const flow = document.createElement("p");
+  flow.className = "tools-flow";
+  flow.textContent = missing.length
+    ? `flow: UNCONFIRMED — missing: ${missing.join(", ")}`
+    : "flow: CONFIRMED";
+  graphHost.replaceChildren(ul, flow);
+  if (!missing.length) return;
+
+  // One select per missing step: its eligible peers, the derived default selected.
+  const picks = [];
+  for (const step of missing) {
+    const st = graph.steps.find((s) => s.step === step) || { step };
+    const dflt = (st.default && st.default.holder) || "";
+    const row = toolsActRow();
+    const label = document.createElement("span");
+    label.textContent = step;
+    const sel = document.createElement("select");
+    sel.setAttribute("aria-label", `Holder for ${step}`);
+    if (!dflt) {
+      const o = document.createElement("option");
+      o.value = ""; o.textContent = "(no default)";
+      sel.append(o);
+    }
+    for (const peer of (Array.isArray(st.eligible) ? st.eligible : [])) {
+      const o = document.createElement("option");
+      o.value = peer; o.textContent = peer;
+      if (peer === dflt) o.selected = true;
+      sel.append(o);
+    }
+    sel.value = dflt;
+    row.append(label, sel);
+    graphHost.append(row);
+    picks.push({ step, sel, dflt });
+  }
+  const act = toolsActRow();
+  const what = document.createElement("input");
+  what.type = "text"; what.placeholder = "what (optional)";
+  what.setAttribute("aria-label", "What");
+  const go = document.createElement("button");
+  go.type = "button"; go.className = "btn-primary"; go.textContent = "Confirm flow";
+  go.onclick = async () => {
+    const holders = {};
+    for (const p of picks) if (p.sel.value && p.sel.value !== p.dflt) holders[p.step] = p.sel.value;
+    const plan = picks.map((p) => `${p.step} → ${p.sel.value || "(no holder)"}`).join(", ");
+    if (!confirm(`confirm flow on #${cardId}? offers: ${plan}`)) return;
+    go.disabled = true;
+    const wait = document.createElement("p");
+    wait.className = "muted";
+    wait.textContent = "sending…";
+    resultEl.replaceChildren(wait);
+    let res;
+    try {
+      res = await apiToolsFlowConfirm(cardId, holders, what.value.trim());
+    } catch (e) {
+      // The gateway's detail in full (api() carries it), as an error; the
+      // button stays usable.
+      const err = document.createElement("p");
+      err.className = "tools-err";
+      err.textContent = `flow not confirmed: ${e.message}`;
+      resultEl.replaceChildren(err);
+      setStatus(`flow #${cardId}: ${e.message}`, "err");
+      go.disabled = false;
+      return;
+    }
+    go.disabled = false;
+    const minted = Array.isArray(res && res.minted) ? res.minted : [];
+    const head = document.createElement("p");
+    if (!minted.length) {
+      head.textContent = "nothing minted: the gateway returned minted: []";
+      resultEl.replaceChildren(head);
+    } else {
+      head.textContent = `minted ${minted.length} offer${minted.length === 1 ? "" : "s"}:`;
+      const ul2 = document.createElement("ul");
+      ul2.className = "msg-list";
+      for (const m of minted) {
+        const li = document.createElement("li");
+        li.textContent = `${m.step} → #${m.id} ${m.holder}`;
+        ul2.append(li);
+      }
+      resultEl.replaceChildren(head, ul2);
+    }
+    setStatus(`flow #${cardId}: ${minted.length} minted`, minted.length ? "ok" : "");
+    await toolsLoadGraph(cardId, graphHost, resultEl);
+  };
+  act.append(what, go);
+  graphHost.append(act);
+}
+// ---------- end step graph + Confirm flow (card #1201) ----------
 
 async function refreshToolsChannels() {
   const res = await apiToolsChannels();
