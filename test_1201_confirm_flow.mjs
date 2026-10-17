@@ -189,25 +189,51 @@ await check("a button and one select per missing step, pre-selected to its defau
     "an optional what input");
 });
 
-await check("the POST body carries only the overridden holders", async () => {
+await check("the POST body carries every missing step with its displayed pick", async () => {
   const ctx = await openCard();
   const sels = find(ctx.detail, (c) => c.tag === "select" && (c.attrs["aria-label"] || "").startsWith("Holder"));
   assert.equal(sels.length, 2, "RED: two holder selects");
-  sels[1].value = "science-claude";          // override review; build stays on its default
+  sels[1].value = "science-claude";          // re-pick review; build stays on its displayed default
   find(ctx.detail, (c) => c.tag === "input" && c.attrs["aria-label"] === "What")[0].value = "  ship #1201  ";
   confirmBtn(ctx.detail).fire("click");
   await flush();
   assert.equal(ctx.confirms.length, 1, "the write confirm()s first");
+  assert.ok(ctx.confirms[0].includes("build → droplet, review → science-claude"),
+    `the confirm names every pick; got "${ctx.confirms[0]}"`);
   assert.equal(posts(ctx).length, 1, "exactly one POST");
   assert.equal(posts(ctx)[0].url, "http://stub.invalid/board/cards/7/flow/confirm");
   assert.deepEqual(JSON.parse(posts(ctx)[0].body),
-    { actor: "commander", holders: { review: "science-claude" }, what: "ship #1201" },
-    "holders names review only; build's default is not sent as an override");
-  // Control: nothing changed -> empty holders, and a blank what is not sent.
+    { actor: "commander", holders: { build: "droplet", review: "science-claude" }, what: "ship #1201" },
+    "holders names ALL missing steps: build's displayed default is sent, not left for the gateway to re-derive");
+  // Control: nothing re-picked -> every displayed default is sent; a blank what is not.
   const ctx2 = await openCard();
   confirmBtn(ctx2.detail).fire("click");
   await flush();
-  assert.deepEqual(JSON.parse(posts(ctx2)[0].body), { actor: "commander", holders: {} });
+  assert.deepEqual(JSON.parse(posts(ctx2)[0].body),
+    { actor: "commander", holders: { build: "droplet", review: "gpu-wsl" } });
+});
+
+await check("a missing step with no displayed pick sends nothing", async () => {
+  // review has no derived default: the screen shows "(no default)". Sending the
+  // rest would let the gateway pick review's holder unseen.
+  const steps = GRAPH_MISSING.steps.map((s) => (s.step === "review" ? { ...s, default: null } : s));
+  const ctx = await openCard({ graphs: [ok({ ...GRAPH_MISSING, steps })] });
+  const sels = find(ctx.detail, (c) => c.tag === "select" && (c.attrs["aria-label"] || "").startsWith("Holder"));
+  assert.equal(sels.length, 2, "RED: two holder selects");
+  assert.deepEqual(sels[1].children.map((o) => o.value), ["", "gpu-wsl", "science-claude"],
+    "a step with no default leads with an empty (no default) option");
+  assert.equal(sels[1].value, "", "and nothing is pre-selected for it");
+  confirmBtn(ctx.detail).fire("click");
+  await flush();
+  assert.equal(posts(ctx).length, 0, "no POST while a missing step has no pick");
+  assert.equal(ctx.confirms.length, 0, "no confirm prompt either");
+  assert.match(textOf(resultOf(ctx.detail)), /pick a holder for review/, "the gap is named on screen");
+  // Picking one unblocks the send, with both picks in the body.
+  sels[1].value = "science-claude";
+  confirmBtn(ctx.detail).fire("click");
+  await flush();
+  assert.deepEqual(JSON.parse(posts(ctx)[0].body),
+    { actor: "commander", holders: { build: "droplet", review: "science-claude" } });
 });
 
 await check("a 409 renders its detail in full and nothing reads as success", async () => {

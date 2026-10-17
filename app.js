@@ -1717,8 +1717,8 @@ const apiToolsAssign = (id, peer) => apiToolsCardPatch(id, { assignee: peer });
 const apiToolsReady = (id, flag = true) => apiToolsCardPatch(id, { move_ready: flag });
 const apiToolsDue = (id, due_at) => apiToolsCardPatch(id, { due_at });
 // card #1201: the step graph (`swarph board cards graph`) and its confirm
-// (`cards confirm-flow`). `holders` names only the steps whose pick differs from
-// the derived default. `actor` rides along as on every PATCH here: under the
+// (`cards confirm-flow`). `holders` names every missing step with the peer the
+// screen showed for it. `actor` rides along as on every PATCH here: under the
 // shared token an absent actor resolves to "anonymous", and an SSO caller with
 // no actor fails the caller binding.
 const apiToolsCardGraph = (id) => api(`/board/cards/${encodeURIComponent(id)}/graph`);
@@ -2082,9 +2082,22 @@ function toolsRenderGraph(cardId, graph, graphHost, resultEl) {
   const go = document.createElement("button");
   go.type = "button"; go.className = "btn-primary"; go.textContent = "Confirm flow";
   go.onclick = async () => {
+    // What the screen shows is what gets minted: EVERY missing step goes with its
+    // displayed pick, defaults included. A step left out would have its default
+    // re-derived by the gateway around the other picks, and could be minted to a
+    // holder the commander never saw. A conflict between picks comes back as a
+    // 409 and is shown below.
+    const unpicked = picks.filter((p) => !p.sel.value).map((p) => p.step);
+    if (unpicked.length) {
+      const err = document.createElement("p");
+      err.className = "tools-err";
+      err.textContent = `pick a holder for ${unpicked.join(", ")}: nothing sent`;
+      resultEl.replaceChildren(err);
+      return;
+    }
     const holders = {};
-    for (const p of picks) if (p.sel.value && p.sel.value !== p.dflt) holders[p.step] = p.sel.value;
-    const plan = picks.map((p) => `${p.step} → ${p.sel.value || "(no holder)"}`).join(", ");
+    for (const p of picks) holders[p.step] = p.sel.value;
+    const plan = picks.map((p) => `${p.step} → ${p.sel.value}`).join(", ");
     if (!confirm(`confirm flow on #${cardId}? offers: ${plan}`)) return;
     go.disabled = true;
     const wait = document.createElement("p");
