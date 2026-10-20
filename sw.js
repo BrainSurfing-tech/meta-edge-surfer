@@ -4,7 +4,7 @@
 // v1 ships rapidly. Network-only with a tiny same-origin runtime cache for
 // static assets is good enough.
 
-const STATIC_CACHE = "mes-static-v28";
+const STATIC_CACHE = "mes-static-v29";
 const STATIC_ASSETS = [
   "./",
   "./index.html",
@@ -39,6 +39,60 @@ self.addEventListener("activate", (event) => {
     )
   );
   self.clients.claim();
+});
+
+// card #1230: the push payload is ids only. The words on the notification
+// come from the gateway render, never from the payload. A failed or unknown
+// row still shows a notice — a silent push is how Safari burns the channel.
+const PUSH_GENERIC = "board: open rows";
+
+async function pushNotice(payload, fetchImpl) {
+  const row = payload && payload.row_id;
+  const msg = payload && payload.msg_id;
+  const data = { row_id: row ?? null, msg_id: msg ?? null };
+  const generic = { title: PUSH_GENERIC, body: "", data };
+  if (row == null || msg == null) return generic;
+  try {
+    const res = await fetchImpl(`/gw/push/render/${row}?msg=${encodeURIComponent(msg)}`, {
+      credentials: "include",
+    });
+    if (!res || !res.ok) return generic;
+    const body = await res.json();
+    if (!body || typeof body.title !== "string" || !body.title.trim()) return generic;
+    return {
+      title: body.title,
+      body: body.label ? String(body.label) : "",
+      data: { ...data, card_id: body.card_id },
+    };
+  } catch {
+    return generic;
+  }
+}
+
+function pushOpenUrl(data) {
+  const url = new URL("./", self.location);
+  url.searchParams.set("view", "actions");
+  if (data && data.row_id != null) url.searchParams.set("row", String(data.row_id));
+  if (data && data.msg_id != null) url.searchParams.set("msg", String(data.msg_id));
+  return url.href;
+}
+
+self.addEventListener("push", (event) => {
+  event.waitUntil((async () => {
+    let payload = {};
+    try { payload = event.data ? event.data.json() : {}; } catch { payload = {}; }
+    const note = await pushNotice(payload, (url, opts) => fetch(url, opts));
+    await self.registration.showNotification(note.title, {
+      body: note.body,
+      data: note.data,
+    });
+  })());
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const url = pushOpenUrl(event.notification.data || {});
+  event.waitUntil(self.clients.openWindow(url));
 });
 
 self.addEventListener("fetch", (event) => {
