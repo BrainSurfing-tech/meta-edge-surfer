@@ -809,10 +809,8 @@ async function refreshActions(force = false) {
     // fields, so the tab shows the row — never the ask prose.
     attachBoundRows(msgs, (oblRes && oblRes.obligations) || []);
 
-    // A question is "waiting" only if unread. read_at is the gateway's own
-    // consumed-flag; do NOT infer from anything else.
     const questions = msgs
-      .filter(m => m.kind === "question" && !m.read_at && m.from_node !== me)
+      .filter(m => questionWaiting(m, me))
       .sort((a, b) => (b.id || 0) - (a.id || 0));
 
     const open = cards.filter(c => !_CLOSED_STAGES.has(c.stage));
@@ -2442,6 +2440,13 @@ function boardRowLabel(row) {
   if (row.accept) parts.push(String(row.accept));
   if (row.holder) parts.push(`@${row.holder}`);
   return parts.join(" · ");
+}
+// A question is "waiting" only if unread (read_at is the gateway's own
+// consumed-flag) and, when it is an ask bound to a board row, only while that
+// row is still open: a closed or withdrawn row was answered on the board.
+function questionWaiting(m, me) {
+  if (!m || m.kind !== "question" || m.read_at || m.from_node === me) return false;
+  return !(m.row && m.row.status && m.row.status !== "open");
 }
 // Pin each ask message to its bound row (by obligation_id); prose-only
 // messages pass through untouched.

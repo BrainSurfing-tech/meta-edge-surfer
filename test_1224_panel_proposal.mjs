@@ -323,7 +323,7 @@ console.log("1224 confirm tests: passed");
     `let _you = null;\nlet _youSig = null;\n` +
     `function renderYou() { if (!_you) return; renderActions({}); }\n` +
     `${apiSendSrc}\n${extract("boardObligationId")}\n${extract("boardAskMessage")}\n` +
-    `${extract("boardBoundRow")}\n${extract("attachBoundRows")}\n` +
+    `${extract("boardBoundRow")}\n${extract("attachBoundRows")}\n${extract("questionWaiting")}\n` +
     `${src.slice(src.indexOf(PSTART), src.indexOf(PEND))}\n${extract("refreshActions")}`,
     rctx);
   await rctx.refreshActions(true);
