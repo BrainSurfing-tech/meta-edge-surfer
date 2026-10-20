@@ -106,6 +106,21 @@ const noToken = await firePush(async (url) => {
 assert.equal(noToken.shown.length, 1, "a missing token showed nothing");
 assert.equal(noToken.shown[0].title, "board: open rows");
 
+const badJson = await firePush(async (url) => {
+  if (url === "/auth/identity-token") return { ok: true, json: async () => { throw new Error("bad json"); } };
+  throw new Error("render must not be called");
+}, { row_id: 7, msg_id: 9, title: secret });
+assert.equal(badJson.shown.length, 1, "bad JSON showed nothing");
+assert.equal(badJson.shown[0].title, "board: open rows");
+
+const renderRefused = await firePush(async (url, opts) => {
+  if (url === "/auth/identity-token") return { ok: true, json: async () => ({ token: ssoToken }) };
+  assert.equal(opts.headers.Authorization, `Bearer ${ssoToken}`);
+  return { ok: false, status: 403, json: async () => ({}) };
+}, { row_id: 7, msg_id: 9, title: secret });
+assert.equal(renderRefused.shown.length, 1, "a refused render showed nothing");
+assert.equal(renderRefused.shown[0].title, "board: open rows");
+
 const noLabel = await firePush(
   renderFetch({ card_id: 1, title: "Ship or hold?", label: null }),
   { row_id: 7, msg_id: 9, body: secret },
