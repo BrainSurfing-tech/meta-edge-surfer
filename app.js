@@ -1661,7 +1661,12 @@ window.addEventListener("DOMContentLoaded", async () => {
       if (hadController) { _updatePending = true; reloadIfUpdated(); }
     });
     document.addEventListener("visibilitychange", () => reloadIfUpdated());
-    navigator.serviceWorker.register("sw.js").catch(() => { /* HTTPS-only on some browsers */ });
+    navigator.serviceWorker.register("sw.js").then((reg) => {
+      // iOS checks sw.js only at launch: check again each time the app returns to the screen.
+      document.addEventListener("visibilitychange", () => {
+        if (!document.hidden) reg.update().catch(() => {});
+      });
+    }).catch(() => { /* HTTPS-only on some browsers */ });
   }
 });
 
