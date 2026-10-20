@@ -1338,6 +1338,7 @@ async function handleSend(ev) {
       (reply_to != null ? ` · reply to #${reply_to}` : "");
     $("#send-content").value = "";
     if (ccField) ccField.value = "";
+    setTimeout(() => reloadIfUpdated(), 3000);   // after the "sent" line has been seen
   } catch (e) {
     $("#send-result").textContent = "✗ " + e.message;
   } finally {
@@ -1654,9 +1655,36 @@ window.addEventListener("DOMContentLoaded", async () => {
   renderAuthState();   // reflect SSO connected-state in Settings
 
   if ("serviceWorker" in navigator) {
+    // No controller at load = first install: this page already runs the current app.js.
+    const hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      if (hadController) { _updatePending = true; reloadIfUpdated(); }
+    });
+    document.addEventListener("visibilitychange", () => reloadIfUpdated());
     navigator.serviceWorker.register("sw.js").catch(() => { /* HTTPS-only on some browsers */ });
   }
 });
+
+// A new service worker takes control (skipWaiting + clients.claim) but an open
+// page keeps running the old app.js until it reloads. Reload once, never over an
+// unsent draft: drafts live only in memory. With a draft, it waits for the next
+// visibility change or send.
+let _updatePending = false;
+function hasUnsentDraft(doc, drafts) {
+  for (const d of drafts.values()) {
+    if (d && (d.opt != null || String(d.note || "").trim())) return true;
+  }
+  const fields = doc.querySelectorAll(
+    "textarea, input:not([type]), input[type=text], input[type=url], input[type=email]");
+  return [...fields].some((el) => !el.readOnly && !String(el.id || "").startsWith("cfg-")
+    && el.id !== "tools-assignee" && String(el.value || "").trim());
+}
+function reloadIfUpdated(doc = document, drafts = _boardDrafts, loc = location) {
+  if (!_updatePending || hasUnsentDraft(doc, drafts)) return false;
+  _updatePending = false;
+  loc.reload();
+  return true;
+}
 
 // ---------- READING QUEUE (card #198) ----------
 // The commander curates, lab reads. An item is EITHER a url (public, lab fetches it)
