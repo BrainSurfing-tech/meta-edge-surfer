@@ -660,6 +660,15 @@ function _boardQuestion(question, sess) {
 
   const draft = _boardDrafts.get(boardDraftKey(question, sess)) || {};
   const options = question.options || [];
+  // card #1224: the pane panel proposed an option (refreshActions pinned its label on the question, already
+  // checked against these options). It pre-selects that option and relabels the button; a label that is not
+  // exactly one of the option labels changes nothing, and the send path below is the one a plain pick takes.
+  const proposedIdx = boundOid != null && question.proposed
+    ? options.findIndex((o) => o && o.label === question.proposed)
+    : -1;
+  const sendText = (i) => (proposedIdx >= 0 && i === proposedIdx
+    ? `confirm: ${options[i].label} on #${boundOid}`
+    : "Send decision");
   options.forEach((opt, i) => {
     const label = document.createElement("label");
     label.className = "board-opt";
@@ -669,9 +678,12 @@ function _boardQuestion(question, sess) {
     radio.value = String(i);
     radio.checked = draft.opt != null
       ? i === draft.opt
-      : (!!opt.rec || (!options.some((o) => o.rec) && i === 0));
+      : (proposedIdx >= 0
+        ? i === proposedIdx
+        : (!!opt.rec || (!options.some((o) => o.rec) && i === 0)));
     radio.addEventListener("change", () => {
       boardDraftSave(question, sess, { opt: i });
+      btn.textContent = sendText(i);
     });
     const text = document.createElement("span");
     text.textContent = opt.label || "";
@@ -705,7 +717,7 @@ function _boardQuestion(question, sess) {
   const btn = document.createElement("button");
   btn.type = "button";
   btn.className = "btn-primary";
-  btn.textContent = "Send decision";
+  btn.textContent = sendText(draft.opt != null ? draft.opt : proposedIdx);
   btn.addEventListener("click", () => {
     const picked = li.querySelector("input:checked");
     const opt = (picked && options[+picked.value]) || {};
@@ -809,6 +821,8 @@ async function refreshActions(force = false) {
         for (const q of (sess && sess.questions) || []) {
           if (q && boardObligationId(q) != null && q.card != null && !q.row) {
             q.row = await boardBoundRow(q);
+            // card #1224: optional. A failed lookup leaves the row without a proposal, never without its row.
+            try { q.proposed = await boardProposedLabel(q, msgs); } catch (e) { q.proposed = null; }
           }
         }
       }
@@ -2441,3 +2455,37 @@ async function deliverFrictionReply(button, question, which, label) {
   }
 }
 // ---------- end commander relay close (#291) ----------
+
+// ---------- panel proposal (#1224) ----------
+// The swarph-panel in a cell's pane does not answer a row. A press posts one DM from that cell to the commander,
+// reply_to = lab's ask for the row, content "panel: <label> on #<row>". It carries no thread_id, so it is read
+// from the commander's inbox (the list the You tab already fetched), not the card thread. The commander still
+// confirms here: the proposal only pre-selects an option, and the commit path is untouched.
+const PANEL_PROPOSAL_PREFIX = "panel:";
+// The label of the newest valid proposal answering this ask, else null. Valid means ALL of: addressed to the
+// commander, sent by the cell that sent the ask, posted after it, replying to it, "panel: <label> on #<row>",
+// and <label> is exactly one of the row's option labels. Anything else is ignored: the row shows with no
+// pre-selection, so a message from another node cannot steer the commander's pick.
+function boardPanelProposal(ask, messages, options) {
+  if (!ask || ask.id == null) return null;
+  const labels = new Set((options || []).map((o) => o && o.label).filter((l) => typeof l === "string"));
+  let best = null, bestLabel = null;
+  for (const m of messages || []) {
+    if (!m || m.reply_to !== ask.id || typeof m.content !== "string") continue;
+    if (m.to_node !== "commander" || m.from_node !== ask.from_node) continue;
+    if (!(Number.isInteger(m.id) && m.id > ask.id) || !m.content.startsWith(PANEL_PROPOSAL_PREFIX)) continue;
+    const label = m.content.slice(PANEL_PROPOSAL_PREFIX.length).trim()
+      .replace(/(^|\s)on\s+#\d+\s*$/, "").trim();
+    if (!labels.has(label)) continue;
+    if (best === null || m.id > best.id) { best = m; bestLabel = label; }
+  }
+  return bestLabel;
+}
+// The proposal for a bound question: lab's ask for its row (same lookup as the commit path), then the inbox.
+async function boardProposedLabel(question, inbox) {
+  const oid = boardObligationId(question);
+  const ask = (oid != null && question && question.card != null)
+    ? await boardAskMessage(question.card, oid) : null;
+  return ask ? boardPanelProposal(ask, inbox, question.options) : null;
+}
+// ---------- end panel proposal (#1224) ----------
