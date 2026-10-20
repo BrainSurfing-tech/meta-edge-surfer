@@ -54,15 +54,30 @@ async function firePush(fetchImpl, payload) {
 }
 
 const secret = "SECRET DM body that must never be shown";
+const ssoToken = "sso-from-cookie";
 
-const shownFromBoard = await firePush(async (url, opts) => {
-  assert.equal(url, "/gw/push/render/7?msg=9");
-  assert.equal(opts.credentials, "include");
-  return {
-    ok: true,
-    json: async () => ({ card_id: 1230, title: "Ship or hold?", label: "Ship" }),
+function renderFetch(body) {
+  const seen = [];
+  const fetchImpl = async (url, opts = {}) => {
+    seen.push(url);
+    if (url === "/auth/identity-token") {
+      assert.equal(opts.credentials, "include");
+      return { ok: true, json: async () => ({ token: ssoToken }) };
+    }
+    assert.equal(url, "/gw/push/render/7?msg=9");
+    assert.equal(opts.headers && opts.headers.Authorization, `Bearer ${ssoToken}`);
+    assert.equal((opts.headers.Authorization || "").includes("from-payload"), false);
+    return { ok: true, json: async () => body };
   };
-}, { row_id: 7, msg_id: 9, title: secret, body: secret, text: secret });
+  fetchImpl.seen = seen;
+  return fetchImpl;
+}
+
+const shownFetch = renderFetch({ card_id: 1230, title: "Ship or hold?", label: "Ship" });
+const shownFromBoard = await firePush(shownFetch, {
+  row_id: 7, msg_id: 9, token: "from-payload", title: secret, body: secret, text: secret,
+});
+assert.deepEqual(shownFetch.seen, ["/auth/identity-token", "/gw/push/render/7?msg=9"]);
 
 assert.equal(shownFromBoard.shown.length, 1);
 assert.equal(shownFromBoard.shown[0].title, "Ship or hold?");
@@ -84,10 +99,17 @@ const thrown = await firePush(async () => { throw new Error("offline"); }, {
 assert.equal(thrown.shown.length, 1, "a failed fetch showed nothing");
 assert.equal(thrown.shown[0].title, "board: open rows");
 
-const noLabel = await firePush(async () => ({
-  ok: true,
-  json: async () => ({ card_id: 1, title: "Ship or hold?", label: null }),
-}), { row_id: 7, msg_id: 9, body: secret });
+const noToken = await firePush(async (url) => {
+  if (url === "/auth/identity-token") return { ok: true, json: async () => ({}) };
+  throw new Error("render must not be called without a token");
+}, { row_id: 7, msg_id: 9, title: secret });
+assert.equal(noToken.shown.length, 1, "a missing token showed nothing");
+assert.equal(noToken.shown[0].title, "board: open rows");
+
+const noLabel = await firePush(
+  renderFetch({ card_id: 1, title: "Ship or hold?", label: null }),
+  { row_id: 7, msg_id: 9, body: secret },
+);
 assert.equal(noLabel.shown[0].title, "Ship or hold?");
 assert.equal(noLabel.shown[0].body, "");
 

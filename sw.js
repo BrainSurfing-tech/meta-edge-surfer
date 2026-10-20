@@ -53,8 +53,16 @@ async function pushNotice(payload, fetchImpl) {
   const generic = { title: PUSH_GENERIC, body: "", data };
   if (row == null || msg == null) return generic;
   try {
+    // /gw/ does not turn the SSO cookie into an Authorization header.
+    // Mint a bearer from the same-origin identity cookie, then send it.
+    const tokRes = await fetchImpl("/auth/identity-token", { credentials: "include" });
+    if (!tokRes || !tokRes.ok) return generic;
+    const tokBody = await tokRes.json();
+    const token = tokBody && tokBody.token;
+    if (!token) return generic;
     const res = await fetchImpl(`/gw/push/render/${row}?msg=${encodeURIComponent(msg)}`, {
       credentials: "include",
+      headers: { Authorization: `Bearer ${token}` },
     });
     if (!res || !res.ok) return generic;
     const body = await res.json();
