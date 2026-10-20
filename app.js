@@ -1012,7 +1012,7 @@ function renderMessages(rootList, msgs) {
     } else {
       replyBtn.addEventListener("click", (ev) => {
         ev.stopPropagation();
-        replyTo(m.from_node);
+        replyTo(m.from_node, m);
       });
     }
     rootList.appendChild(li);
@@ -1331,8 +1331,11 @@ async function handleSend(ev) {
   btn.disabled = true;
   $("#send-result").textContent = "sending…";
   try {
-    const r = await apiSend(to_node, kind, content, cc);
-    $("#send-result").textContent = `✓ id=${r.id} sent at ${fmtTime(r.created_at)}`;
+    const { thread_id, reply_to } = replyFields(_replyCtx, to_node);
+    const r = await apiSend(to_node, kind, content, cc, thread_id, reply_to);
+    _replyCtx = null;
+    $("#send-result").textContent = `✓ id=${r.id} sent at ${fmtTime(r.created_at)}` +
+      (reply_to != null ? ` · reply to #${reply_to}` : "");
     $("#send-content").value = "";
     if (ccField) ccField.value = "";
   } catch (e) {
@@ -1345,7 +1348,20 @@ async function handleSend(ev) {
 // Jump to the Send view pre-filled to answer a specific peer's DM. Populates the
 // peer list FIRST (idempotent) so showView's own populate call early-returns and
 // can't wipe the selection we set here.
-async function replyTo(peer) {
+// The message a Reply was opened from, so the send carries reply_to and its
+// thread (the gateway binds the answer to that DM). Cleared after one send.
+let _replyCtx = null;
+
+// The reply fields for a send to `to_node`, only while it still goes to the
+// sender of the message Reply was opened from.
+function replyFields(ctx, to_node) {
+  if (!ctx || ctx.peer !== to_node) return { thread_id: null, reply_to: null };
+  return { thread_id: ctx.thread_id ?? null, reply_to: ctx.id ?? null };
+}
+
+async function replyTo(peer, msg) {
+  _replyCtx = msg && msg.id != null
+    ? { peer, id: msg.id, thread_id: msg.thread_id ?? null } : null;
   await populatePeers();
   showView("send");
   const sel = $("#send-to");
@@ -1357,7 +1373,7 @@ async function replyTo(peer) {
   sel.value = peer;
   $("#send-kind").value = "answer";
   $("#send-content").focus();
-  setStatus(`replying to ${peer}`, "ok");
+  setStatus(_replyCtx ? `replying to ${peer} (#${_replyCtx.id})` : `replying to ${peer}`, "ok");
 }
 
 // ---------- highlights ----------
