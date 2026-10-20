@@ -58,6 +58,7 @@ const ssoToken = "sso-from-cookie";
 
 function renderFetch(body) {
   const seen = [];
+  const headers = [];
   const fetchImpl = async (url, opts = {}) => {
     seen.push(url);
     if (url === "/auth/identity-token") {
@@ -65,11 +66,11 @@ function renderFetch(body) {
       return { ok: true, json: async () => ({ token: ssoToken }) };
     }
     assert.equal(url, "/gw/push/render/7?msg=9");
-    assert.equal(opts.headers && opts.headers.Authorization, `Bearer ${ssoToken}`);
-    assert.equal((opts.headers.Authorization || "").includes("from-payload"), false);
+    headers.push(opts.headers && opts.headers.Authorization);
     return { ok: true, json: async () => body };
   };
   fetchImpl.seen = seen;
+  fetchImpl.headers = headers;
   return fetchImpl;
 }
 
@@ -78,6 +79,8 @@ const shownFromBoard = await firePush(shownFetch, {
   row_id: 7, msg_id: 9, token: "from-payload", title: secret, body: secret, text: secret,
 });
 assert.deepEqual(shownFetch.seen, ["/auth/identity-token", "/gw/push/render/7?msg=9"]);
+assert.deepEqual(shownFetch.headers, [`Bearer ${ssoToken}`]);
+assert.equal(shownFetch.headers[0].includes("from-payload"), false);
 
 assert.equal(shownFromBoard.shown.length, 1);
 assert.equal(shownFromBoard.shown[0].title, "Ship or hold?");
