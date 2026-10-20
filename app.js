@@ -620,6 +620,7 @@ function _boardQuestion(question, sess) {
   // never prose. A row that cannot be fetched shows "row unavailable" and
   // NO buttons: a blind tap cannot bind.
   const boundOid = boardObligationId(question);
+  if (boundOid != null && li.dataset) li.dataset.row = String(boundOid);
   if (boundOid != null) {
     const primary = document.createElement("div");
     primary.className = "action-primary";
@@ -776,9 +777,18 @@ function toggleNav(force) {
 // note, a picked option or an opened fold survives the 30 s tick.
 let _you = null;
 let _youSig = null;
+function focusYouRow(doc, search) {
+  const row = new URLSearchParams(search || "").get("row");
+  if (!row || !doc || typeof doc.querySelector !== "function") return null;
+  const focus = doc.querySelector(`[data-row="${CSS.escape(row)}"]`);
+  if (focus && typeof focus.scrollIntoView === "function") focus.scrollIntoView({ block: "center" });
+  return focus;
+}
+
 function renderYou() {
   if (!_you) return;
   renderActions({ ..._you.grouped, ...boardBuckets(_you.board) });
+  focusYouRow(document, typeof location !== "undefined" ? location.search : "");
 }
 
 async function refreshActions(force = false) {
@@ -1436,6 +1446,44 @@ function saveSettings(ev) {
   $("#send-to").innerHTML = "";
 }
 
+function urlBase64ToUint8Array(base64) {
+  const pad = "=".repeat((4 - (base64.length % 4)) % 4);
+  const raw = atob((base64 + pad).replace(/-/g, "+").replace(/_/g, "/"));
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
+}
+
+// card #1230: Settings asks for permission, then stores the browser
+// subscription on the gateway. The private key never reaches this page.
+async function subscribePhonePush() {
+  const out = $("#cfg-push-result");
+  if (out) out.textContent = "asking…";
+  if (!("Notification" in window) || !("serviceWorker" in navigator) || !("PushManager" in window)) {
+    if (out) out.textContent = "this browser has no push";
+    return;
+  }
+  const perm = await Notification.requestPermission();
+  if (perm !== "granted") {
+    if (out) out.textContent = "permission " + perm;
+    return;
+  }
+  const base = String(state.base || "").replace(/\/$/, "");
+  const keyRes = await fetch(base + "/push/vapid-public-key");
+  if (!keyRes.ok) {
+    if (out) out.textContent = "no public key";
+    return;
+  }
+  const { public_key } = await keyRes.json();
+  const reg = await navigator.serviceWorker.ready;
+  const sub = await reg.pushManager.subscribe({
+    userVisibleOnly: true,
+    applicationServerKey: urlBase64ToUint8Array(public_key),
+  });
+  await api("/push/subscriptions", { method: "POST", body: JSON.stringify(sub.toJSON()) });
+  if (out) out.textContent = "phone notifications on";
+}
+
 async function testConnection() {
   $("#cfg-result").textContent = "testing…";
   // apply current form values without persisting
@@ -1555,6 +1603,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("#send-form").addEventListener("submit", handleSend);
   $("#settings-form").addEventListener("submit", saveSettings);
   $("#cfg-test").addEventListener("click", testConnection);
+  $("#cfg-push")?.addEventListener("click", subscribePhonePush);
   $("#invite-form")?.addEventListener("submit", handleCreateInvite);
   $("#inv-copy")?.addEventListener("click", copyInviteLink);
 
