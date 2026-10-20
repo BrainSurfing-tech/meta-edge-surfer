@@ -121,6 +121,8 @@ const ctx = vm.createContext({
       pushManager: { subscribe: async (opts) => {
         calls.subscribe += 1;
         assert.equal(opts.userVisibleOnly, true);
+        assert.ok(opts.applicationServerKey instanceof Uint8Array, "subscribe must pass E2's VAPID key");
+        assert.deepEqual([...opts.applicationServerKey], [1, 0, 1]);
         return { toJSON: () => ({ endpoint: "https://push.example/1", keys: { p256dh: "p", auth: "a" } }) };
       } },
     }) },
