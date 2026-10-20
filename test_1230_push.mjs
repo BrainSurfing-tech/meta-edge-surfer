@@ -144,4 +144,27 @@ assert.equal(posts.length, 1);
 assert.equal(posts[0].path, "/push/subscriptions");
 assert.equal(posts[0].opts.method, "POST");
 
+const focusSrc = appSrc.slice(appSrc.indexOf("function focusYouRow"), appSrc.indexOf("function renderYou"));
+assert.ok(focusSrc.startsWith("function focusYouRow"), "row focus helper is missing");
+const scrolled = [];
+const focusDoc = {
+  querySelector(sel) {
+    return sel === '[data-row="7"]'
+      ? { scrollIntoView(opts) { scrolled.push(opts.block); } }
+      : null;
+  },
+};
+const CSS = { escape: (s) => String(s) };
+const focusCtx = vm.createContext({ URLSearchParams, CSS, focusDoc, scrolled });
+vm.runInContext(`${focusSrc}\nfocusYouRow(focusDoc, "?view=actions&row=7");`, focusCtx);
+assert.deepEqual(scrolled, ["center"]);
+vm.runInContext(`focusYouRow(focusDoc, "?view=actions");`, focusCtx);
+assert.deepEqual(scrolled, ["center"], "a click with no row must not scroll a second time");
+const bare = {};
+assert.equal(appSrc.includes("if (boundOid != null && li.dataset) li.dataset.row = String(boundOid);"), true);
+vm.runInContext(
+  "if (boundOid != null && li.dataset) li.dataset.row = String(boundOid);",
+  vm.createContext({ boundOid: 7, li: bare }),
+);
+
 console.log("test_1230_push: passed");

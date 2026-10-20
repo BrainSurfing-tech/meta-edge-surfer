@@ -620,7 +620,7 @@ function _boardQuestion(question, sess) {
   // never prose. A row that cannot be fetched shows "row unavailable" and
   // NO buttons: a blind tap cannot bind.
   const boundOid = boardObligationId(question);
-  if (boundOid != null) li.dataset.row = String(boundOid);
+  if (boundOid != null && li.dataset) li.dataset.row = String(boundOid);
   if (boundOid != null) {
     const primary = document.createElement("div");
     primary.className = "action-primary";
@@ -777,13 +777,18 @@ function toggleNav(force) {
 // note, a picked option or an opened fold survives the 30 s tick.
 let _you = null;
 let _youSig = null;
+function focusYouRow(doc, search) {
+  const row = new URLSearchParams(search || "").get("row");
+  if (!row || !doc || typeof doc.querySelector !== "function") return null;
+  const focus = doc.querySelector(`[data-row="${CSS.escape(row)}"]`);
+  if (focus && typeof focus.scrollIntoView === "function") focus.scrollIntoView({ block: "center" });
+  return focus;
+}
+
 function renderYou() {
   if (!_you) return;
   renderActions({ ..._you.grouped, ...boardBuckets(_you.board) });
-  const row = new URLSearchParams(location.search).get("row");
-  if (!row) return;
-  const focus = document.querySelector(`[data-row="${CSS.escape(row)}"]`);
-  if (focus) focus.scrollIntoView({ block: "center" });
+  focusYouRow(document, typeof location !== "undefined" ? location.search : "");
 }
 
 async function refreshActions(force = false) {
