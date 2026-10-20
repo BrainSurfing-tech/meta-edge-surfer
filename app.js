@@ -660,16 +660,14 @@ function _boardQuestion(question, sess) {
 
   const draft = _boardDrafts.get(boardDraftKey(question, sess)) || {};
   const options = question.options || [];
-  // card #1224: the pane panel proposed an option (refreshActions pinned its label on the question). It
-  // pre-selects that option and relabels the button; a label that names no option changes nothing, and the
-  // send path below is the same one a plain pick takes.
-  const proposedLabel = boundOid != null && question.proposed
-    ? String(question.proposed).trim().toLowerCase() : "";
-  const proposedIdx = proposedLabel
-    ? options.findIndex((o) => [o.label, o.text].some((t) => String(t || "").trim().toLowerCase() === proposedLabel))
+  // card #1224: the pane panel proposed an option (refreshActions pinned its label on the question, already
+  // checked against these options). It pre-selects that option and relabels the button; a label that is not
+  // exactly one of the option labels changes nothing, and the send path below is the one a plain pick takes.
+  const proposedIdx = boundOid != null && question.proposed
+    ? options.findIndex((o) => o && o.label === question.proposed)
     : -1;
   const sendText = (i) => (proposedIdx >= 0 && i === proposedIdx
-    ? `confirm: ${options[i].label || options[i].text || ""} on #${boundOid}`
+    ? `confirm: ${options[i].label} on #${boundOid}`
     : "Send decision");
   options.forEach((opt, i) => {
     const label = document.createElement("label");
@@ -2464,25 +2462,30 @@ async function deliverFrictionReply(button, question, which, label) {
 // from the commander's inbox (the list the You tab already fetched), not the card thread. The commander still
 // confirms here: the proposal only pre-selects an option, and the commit path is untouched.
 const PANEL_PROPOSAL_PREFIX = "panel:";
-// The label of the newest proposal answering this ask, else null.
-function boardPanelProposal(askId, messages) {
-  if (askId == null) return null;
-  let best = null;
+// The label of the newest valid proposal answering this ask, else null. Valid means ALL of: addressed to the
+// commander, sent by the cell that sent the ask, posted after it, replying to it, "panel: <label> on #<row>",
+// and <label> is exactly one of the row's option labels. Anything else is ignored: the row shows with no
+// pre-selection, so a message from another node cannot steer the commander's pick.
+function boardPanelProposal(ask, messages, options) {
+  if (!ask || ask.id == null) return null;
+  const labels = new Set((options || []).map((o) => o && o.label).filter((l) => typeof l === "string"));
+  let best = null, bestLabel = null;
   for (const m of messages || []) {
-    if (!m || m.reply_to !== askId || typeof m.content !== "string") continue;
-    if (!m.content.startsWith(PANEL_PROPOSAL_PREFIX)) continue;
-    if (best === null || (m.id || 0) > (best.id || 0)) best = m;
+    if (!m || m.reply_to !== ask.id || typeof m.content !== "string") continue;
+    if (m.to_node !== "commander" || m.from_node !== ask.from_node) continue;
+    if (!(Number.isInteger(m.id) && m.id > ask.id) || !m.content.startsWith(PANEL_PROPOSAL_PREFIX)) continue;
+    const label = m.content.slice(PANEL_PROPOSAL_PREFIX.length).trim()
+      .replace(/(^|\s)on\s+#\d+\s*$/, "").trim();
+    if (!labels.has(label)) continue;
+    if (best === null || m.id > best.id) { best = m; bestLabel = label; }
   }
-  if (best === null) return null;
-  const label = best.content.slice(PANEL_PROPOSAL_PREFIX.length).trim()
-    .replace(/(^|\s)on\s+#\d+\s*$/, "").trim();
-  return label || null;
+  return bestLabel;
 }
 // The proposal for a bound question: lab's ask for its row (same lookup as the commit path), then the inbox.
 async function boardProposedLabel(question, inbox) {
   const oid = boardObligationId(question);
   const ask = (oid != null && question && question.card != null)
     ? await boardAskMessage(question.card, oid) : null;
-  return ask && ask.id != null ? boardPanelProposal(ask.id, inbox) : null;
+  return ask ? boardPanelProposal(ask, inbox, question.options) : null;
 }
 // ---------- end panel proposal (#1224) ----------

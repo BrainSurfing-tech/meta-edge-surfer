@@ -1,7 +1,8 @@
 // card #1224 — a pane panel's proposal shows on the You tab. The panel posts one DM to the
 // commander: reply_to = lab's ask for the row, content "panel: <label> on #<row>". The tab
 // pre-selects that option and labels its button "confirm: <label> on #<row>". The commander still
-// confirms, and the commit path (sendBoardDecisionAndClose) is byte-unchanged.
+// confirms, and the commit path (sendBoardDecisionAndClose) is byte-unchanged. A proposal counts only when it
+// is to the commander, from the cell that sent the ask, after the ask, and names a real option exactly.
 // Fetch is stubbed; nothing is sent.
 // Run: node test_1224_panel_proposal.mjs   (exit 0 = pass)
 import { readFileSync } from "node:fs";
@@ -118,38 +119,73 @@ vm.runInContext(
   ctx);
 
 // ---- boardPanelProposal: which message is the proposal, and what its label is ----
-const prop = (id, content, reply_to = 55, extra = {}) => ({ id, from_node: "lab-ovh", to_node: "commander", kind: "question", reply_to, content, ...extra });
+const CHOICES = [
+  { label: "Extend", text: "extend", rec: false, outcome: "pass" },
+  { label: "Flip", text: "flip", rec: false, outcome: "pass" },
+  { label: "Kill", text: "kill", rec: false, outcome: "pass" },
+];
+const prop = (id, content, extra = {}) => ({ id, from_node: "lab-ovh", to_node: "commander", kind: "question", reply_to: 55, content, ...extra });
 {
-  const P = ctx.boardPanelProposal;
-  assert.equal(P(55, [prop(60, "panel: Flip on #291")]), "Flip");
-  assert.equal(P(55, [prop(60, "panel: Extend on #291"), prop(62, "panel: Kill on #291"), prop(61, "panel: Flip on #291")]),
+  const P = (messages, ask = ASK, options = CHOICES) => ctx.boardPanelProposal(ask, messages, options);
+  // The valid case still pre-selects.
+  assert.equal(P([prop(60, "panel: Flip on #291")]), "Flip");
+  assert.equal(P([prop(60, "panel: Extend on #291"), prop(62, "panel: Kill on #291"), prop(61, "panel: Flip on #291")]),
     "Kill", "the newest proposal wins, whatever the list order");
-  assert.equal(P(55, [prop(60, "panel: Flip on #291", 99)]), null, "a proposal for another ask is not this row's");
-  assert.equal(P(55, [prop(60, "Flip on #291")]), null, "no panel: prefix, no proposal");
-  assert.equal(P(55, [prop(60, "panel: Flip on #291", null)]), null, "no reply_to, no proposal");
-  assert.equal(P(55, [prop(60, "Panel: Flip on #291")]), null, "the prefix is exact");
-  assert.equal(P(55, [prop(60, "panel: Turn on #2 later on #291")]), "Turn on #2 later", "only the trailing row marker is cut");
-  assert.equal(P(55, [prop(60, "panel: Flip")]), "Flip", "a proposal with no row marker still reads");
-  assert.equal(P(55, [prop(60, "panel:  on #291")]), null, "no label, no proposal");
-  assert.equal(P(null, [prop(60, "panel: Flip on #291", null)]), null);
-  assert.equal(P(55, null), null);
-  assert.equal(P(55, [null, {}, { id: 3, reply_to: 55, content: 7 }]), null, "malformed entries are skipped");
+  assert.equal(P([prop(60, "panel: Flip")]), "Flip", "a proposal with no row marker still reads");
+  // A message from any node but the one that asked is ignored.
+  assert.equal(P([prop(60, "panel: Flip on #291", { from_node: "drop-on-meta-edge" })]), null, "RED: another from_node is ignored");
+  assert.equal(P([prop(60, "panel: Flip on #291", { from_node: "commander" })]), null);
+  assert.equal(P([prop(60, "panel: Flip on #291", { from_node: undefined })]), null);
+  assert.equal(P([prop(61, "panel: Kill on #291", { from_node: "science-claude" }), prop(60, "panel: Flip on #291")]), "Flip",
+    "a newer message from another node does not displace the asker's proposal");
+  assert.equal(P([prop(60, "panel: Flip on #291", { from_node: "science-claude" })], { ...ASK, from_node: "science-claude" }), "Flip",
+    "the asker is whoever sent THIS ask, not a fixed name");
+  // Addressed to the commander, and posted after the ask.
+  assert.equal(P([prop(60, "panel: Flip on #291", { to_node: "lab-ovh" })]), null);
+  assert.equal(P([prop(60, "panel: Flip on #291", { to_node: undefined })]), null);
+  assert.equal(P([prop(55, "panel: Flip on #291")]), null, "not after the ask (same id)");
+  assert.equal(P([prop(54, "panel: Flip on #291")]), null, "not after the ask (older id)");
+  assert.equal(P([prop("60", "panel: Flip on #291")]), null, "a non-numeric id is not after anything");
+  // The label must be exactly one of the row's option labels.
+  assert.equal(P([prop(60, "panel: Defer on #291")]), null, "RED: a label that is not a real option is ignored");
+  assert.equal(P([prop(60, "panel: flip on #291")]), null, "exact: case matters");
+  assert.equal(P([prop(60, "panel: Flip now on #291")]), null);
+  assert.equal(P([prop(60, "panel: extend on #291")]), null, "an option's text is not its label");
+  assert.equal(P([prop(60, "panel: Flip on #291")], ASK, []), null, "no options, no proposal");
+  assert.equal(P([prop(60, "panel: Flip on #291")], ASK, null), null);
+  assert.equal(P([prop(60, "panel: Flip on #291")], ASK, [{ text: "flip" }, null, { label: 7 }]), null);
+  assert.equal(P([prop(60, "panel: Flip on #291"), prop(61, "panel: Defer on #291")]), "Flip",
+    "a newer invalid label does not mask an older valid one");
+  // Reply, prefix and shape.
+  assert.equal(P([prop(60, "panel: Flip on #291", { reply_to: 99 })]), null, "a proposal for another ask is not this row's");
+  assert.equal(P([prop(60, "panel: Flip on #291", { reply_to: null })]), null, "no reply_to, no proposal");
+  assert.equal(P([prop(60, "Flip on #291")]), null, "no panel: prefix, no proposal");
+  assert.equal(P([prop(60, "Panel: Flip on #291")]), null, "the prefix is exact");
+  assert.equal(P([prop(60, "panel:  on #291")]), null, "no label, no proposal");
+  assert.equal(P([prop(60, "panel: Turn on #2 later on #291")], ASK, [{ label: "Turn on #2 later" }]), "Turn on #2 later", "only the trailing row marker is cut");
+  assert.equal(P(null), null);
+  assert.equal(P([null, {}, prop(3, 7)]), null, "malformed entries are skipped");
+  assert.equal(ctx.boardPanelProposal(null, [prop(60, "panel: Flip on #291")], CHOICES), null);
+  assert.equal(ctx.boardPanelProposal({ from_node: "lab-ovh" }, [prop(60, "panel: Flip on #291")], CHOICES), null);
 }
 console.log("1224 proposal parse tests: passed");
 
 // ---- boardProposedLabel: lab's ask by the commit path's own lookup, then the inbox ----
-const inbox = [prop(60, "panel: Flip on #291"), prop(40, "panel: Kill on #7", 12)];
+const inbox = [prop(60, "panel: Flip on #291"), prop(40, "panel: Kill on #7", { reply_to: 12 })];
 {
   calls.length = 0;
-  const q = { id: "obl-291", card: 7, obligation: 291 };
+  const q = { id: "obl-291", card: 7, obligation: 291, options: CHOICES };
   assert.equal(await ctx.boardProposedLabel(q, inbox), "Flip");
   assert.equal(calls.length, 1, "one read: the card thread (the inbox is already in hand)");
   assert.ok(calls[0].url.includes("/board/cards/7/thread?") && calls[0].method === "GET");
 
   calls.length = 0;
-  assert.equal(await ctx.boardProposedLabel({ id: "obl-x", card: 7 }, inbox), null, "no obligation id, no fetch");
-  assert.equal(await ctx.boardProposedLabel({ id: "obl-x", obligation: 291 }, inbox), null, "no card, no fetch");
+  assert.equal(await ctx.boardProposedLabel({ id: "obl-x", card: 7, options: CHOICES }, inbox), null, "no obligation id, no fetch");
+  assert.equal(await ctx.boardProposedLabel({ id: "obl-x", obligation: 291, options: CHOICES }, inbox), null, "no card, no fetch");
   assert.equal(calls.length, 0);
+  assert.equal(await ctx.boardProposedLabel({ ...q, options: [{ label: "Hold" }] }, inbox), null, "Flip is no option of this row");
+  assert.equal(await ctx.boardProposedLabel(q, [prop(60, "panel: Flip on #291", { from_node: "drop-on-meta-edge" })]), null,
+    "the lookup applies the asker rule: a proposal from another node is ignored");
 
   threadMessages = [];
   assert.equal(await ctx.boardProposedLabel(q, inbox), null, "no ask on the card thread, no proposal");
@@ -159,11 +195,6 @@ console.log("1224 proposal lookup tests: passed");
 
 // ---- the You tab card ----
 const buildRow = { id: 291, card_id: 7, step: "build", accept: "PASS = the commander picks one", holder: "commander" };
-const CHOICES = [
-  { label: "Extend", text: "extend", rec: false, outcome: "pass" },
-  { label: "Flip", text: "flip", rec: false, outcome: "pass" },
-  { label: "Kill", text: "kill", rec: false, outcome: "pass" },
-];
 const labSess = { name: "lab-ovh" };
 let n = 0;
 const card = (extra = {}, options = CHOICES) => ctx._boardQuestion({
@@ -182,11 +213,13 @@ const card = (extra = {}, options = CHOICES) => ctx._boardQuestion({
   pick(c, 1);
   assert.equal(btnOf(c).textContent, "confirm: Flip on #291");
 }
-// The match is by label or text, ignoring case and edge space.
-assert.equal(checkedIdx(card({ proposed: "  KILL " })), 2);
-assert.equal(checkedIdx(card({ proposed: "extend" }, [
-  { label: "Go on", text: "extend", outcome: "pass" }, { label: "Stop", text: "stop", outcome: "pass" },
-])), 0, "the option text matches too, and the button shows the option's label");
+// The match is the exact option label: not its text, not another case, not padded.
+assert.equal(checkedIdx(card({ proposed: "Kill" })), 2);
+for (const near of ["KILL", "kill", " Kill", "Kill ", "go"]) {
+  const c = card({ proposed: near }, [CHOICES[0], CHOICES[1], { label: "Kill", text: "go", outcome: "pass" }]);
+  assert.equal(checkedIdx(c), 0, `${JSON.stringify(near)} is not the label of any option`);
+  assert.equal(btnOf(c).textContent, "Send decision");
+}
 // A recommended option is displaced by the proposal, not the other way round.
 {
   const c = card({ proposed: "Kill" }, [{ ...CHOICES[0], rec: true }, CHOICES[1], CHOICES[2]]);
@@ -203,7 +236,7 @@ assert.equal(checkedIdx(card({ proposed: "extend" }, [
   assert.equal(btnOf(ctx._boardQuestion(q, labSess)).textContent, "confirm: Flip on #291", "a draft that picks the proposal keeps the label");
 }
 // Nothing proposed, or a label that names no option: the tab is what it was.
-for (const proposed of [undefined, null, "", "Defer", "ship on #291"]) {
+for (const proposed of [undefined, null, "", "Defer", "ship on #291", "Flip on #291"]) {
   const c = card({ proposed });
   assert.equal(checkedIdx(c), 0, `no option is pre-selected for ${JSON.stringify(proposed)}: the first stays the default`);
   assert.equal(btnOf(c).textContent, "Send decision");
@@ -265,6 +298,7 @@ console.log("1224 confirm tests: passed");
     { id: "obl-291", title: "Extend, flip, or kill?", card: 7, obligation: 291, options: CHOICES },
     { id: "obl-292", title: "Plain?", options: CHOICES },
   ] }] };
+  let wiredInbox = [prop(60, "panel: Flip on #291")];
   const rctx = {
     state: { token: "tok", base: "http://stub.invalid" },
     selfNode: () => "commander",
@@ -277,7 +311,7 @@ console.log("1224 confirm tests: passed");
     fetch: async (url) => {
       const u = String(url);
       const ok = (json) => ({ ok: true, status: 200, statusText: "OK", json: async () => json });
-      if (u.includes("/messages?")) return ok({ messages: [prop(60, "panel: Flip on #291")] });
+      if (u.includes("/messages?")) return ok({ messages: wiredInbox });
       if (u.includes("/thread?")) return ok({ messages: [ASK] });
       if (u.includes("/board/obligations")) return ok({ obligations: [{ id: 291, card_id: 7, step: "build", accept: "a", holder: "commander", status: "open" }] });
       return ok({ cards: [] });
@@ -296,6 +330,15 @@ console.log("1224 confirm tests: passed");
   assert.equal(board.sessions[0].questions[0].proposed, "Flip", "RED: refreshActions pins the proposal on the bound question");
   assert.equal(board.sessions[0].questions[1].proposed, undefined, "an unbound question is not looked up");
   assert.equal(board.sessions[0].questions[0].row.id, 291);
+
+  // The same proposal from a node that did not send the ask pins nothing.
+  wiredInbox = [prop(60, "panel: Flip on #291", { from_node: "drop-on-meta-edge" })];
+  board.sessions[0].questions[0].proposed = undefined;
+  board.sessions[0].questions[0].row = undefined;
+  await rctx.refreshActions(true);
+  assert.equal(board.sessions[0].questions[0].proposed, null, "RED: a proposal from another node is not pinned");
+  assert.equal(board.sessions[0].questions[0].row.id, 291);
+  wiredInbox = [prop(60, "panel: Flip on #291")];
 
   // A lookup that throws must not cost the question its row.
   board.sessions[0].questions[0].proposed = undefined;
