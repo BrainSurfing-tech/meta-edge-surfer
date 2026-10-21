@@ -120,7 +120,13 @@ async function api(path, opts = {}) {
 // Login sets an httpOnly cookie; we exchange it for a short-lived RS256 identity
 // JWT held in MEMORY (never localStorage — it's a gateway-trusted bearer).
 // Degrades silently to the manual token when no auth backend is present (dev).
-async function ssoIdentityToken() {
+// A resume fires the You tab's 3 lists at once and each 401 asks for a token:
+// share the request in flight instead of sending one per 401.
+let _tokenFetch = null;
+function ssoIdentityToken() {
+  return _tokenFetch ||= fetchIdentityToken().finally(() => { _tokenFetch = null; });
+}
+async function fetchIdentityToken() {
   try {
     const r = await fetch("/auth/identity-token", { credentials: "include" });
     if (!r.ok) return null;
