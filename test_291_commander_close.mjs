@@ -365,7 +365,7 @@ assert.equal(ctx.calls.length, 0, "a self-addressed tap sends and closes nothing
     `${apiSendSrc}\n${extract("boardObligationId")}\n` +
     `${extract("boardAskMessage")}\n` +
     `${extract("boardBoundRow")}\n${extract("attachBoundRows")}\n` +
-    `${extract("refreshActions")}`,
+    `let _actionsLoad = null;\n${extract("refreshActions")}\n${extract("loadActions")}`,
     rctx);
   await rctx.refreshActions(true);
   const qs = board.sessions[0].questions;

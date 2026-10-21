@@ -324,7 +324,7 @@ console.log("1224 confirm tests: passed");
     `function renderYou() { if (!_you) return; renderActions({}); }\n` +
     `${apiSendSrc}\n${extract("boardObligationId")}\n${extract("boardAskMessage")}\n` +
     `${extract("boardBoundRow")}\n${extract("attachBoundRows")}\n${extract("questionWaiting")}\n` +
-    `${src.slice(src.indexOf(PSTART), src.indexOf(PEND))}\n${extract("refreshActions")}`,
+    `${src.slice(src.indexOf(PSTART), src.indexOf(PEND))}\nlet _actionsLoad = null;\n${extract("refreshActions")}\n${extract("loadActions")}`,
     rctx);
   await rctx.refreshActions(true);
   assert.equal(board.sessions[0].questions[0].proposed, "Flip", "RED: refreshActions pins the proposal on the bound question");

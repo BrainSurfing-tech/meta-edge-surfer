@@ -791,7 +791,14 @@ function renderYou() {
   focusYouRow(document, typeof location !== "undefined" ? location.search : "");
 }
 
-async function refreshActions(force = false) {
+// Boot calls this from showView("actions") and again from the poll loop's first
+// tick before the first load ends: share the load in flight (~16 MB per fetch).
+let _actionsLoad = null;
+function refreshActions(force = false) {
+  return _actionsLoad ||= loadActions(force).finally(() => { _actionsLoad = null; });
+}
+
+async function loadActions(force = false) {
   const me = selfNode();
   try {
     setStatus("loading actions…");
