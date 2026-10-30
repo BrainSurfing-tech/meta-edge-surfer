@@ -1991,6 +1991,8 @@ function renderReadable(text) {
       ol.setAttribute("start", first[1]);
       while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) {
         const li = document.createElement("li");
+        const num = /^\s*(\d+)\.\s+/.exec(lines[i]);
+        li.setAttribute("value", num[1]);
         li.textContent = lines[i].replace(/^\s*\d+\.\s+/, "");
         ol.append(li);
         i++;
