@@ -1491,25 +1491,31 @@ async function subscribePhonePush() {
     if (out) out.textContent = "this browser has no push";
     return;
   }
-  const perm = await Notification.requestPermission();
-  if (perm !== "granted") {
-    if (out) out.textContent = "permission " + perm;
-    return;
+  try {
+    const perm = await Notification.requestPermission();
+    if (perm !== "granted") {
+      if (out) out.textContent = "permission " + perm;
+      return;
+    }
+    const base = String(state.base || "").replace(/\/$/, "");
+    const keyRes = await fetch(base + "/push/vapid-public-key");
+    if (!keyRes.ok) {
+      if (out) out.textContent = "no public key";
+      return;
+    }
+    const { public_key } = await keyRes.json();
+    const reg = await navigator.serviceWorker.ready;
+    const existing = await reg.pushManager.getSubscription();
+    if (existing) await existing.unsubscribe();
+    const sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(public_key),
+    });
+    await api("/push/subscriptions", { method: "POST", body: JSON.stringify(sub.toJSON()) });
+    if (out) out.textContent = "phone notifications on";
+  } catch (e) {
+    if (out) out.textContent = e && e.message ? e.message : String(e);
   }
-  const base = String(state.base || "").replace(/\/$/, "");
-  const keyRes = await fetch(base + "/push/vapid-public-key");
-  if (!keyRes.ok) {
-    if (out) out.textContent = "no public key";
-    return;
-  }
-  const { public_key } = await keyRes.json();
-  const reg = await navigator.serviceWorker.ready;
-  const sub = await reg.pushManager.subscribe({
-    userVisibleOnly: true,
-    applicationServerKey: urlBase64ToUint8Array(public_key),
-  });
-  await api("/push/subscriptions", { method: "POST", body: JSON.stringify(sub.toJSON()) });
-  if (out) out.textContent = "phone notifications on";
 }
 
 async function testConnection() {

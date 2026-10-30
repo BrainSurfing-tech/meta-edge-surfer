@@ -158,7 +158,9 @@ const ctx = vm.createContext({
   Notification,
   navigator: {
     serviceWorker: { ready: Promise.resolve({
-      pushManager: { subscribe: async (opts) => {
+      pushManager: {
+        getSubscription: async () => null,
+        subscribe: async (opts) => {
         calls.subscribe += 1;
         assert.equal(opts.userVisibleOnly, true);
         assert.ok(opts.applicationServerKey instanceof Uint8Array, "subscribe must pass E2's VAPID key");
