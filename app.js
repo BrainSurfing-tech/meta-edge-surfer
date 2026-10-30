@@ -1964,6 +1964,46 @@ async function refreshToolsCards() {
   $("#tools-meta").textContent = `${cards.length} card${cards.length === 1 ? "" : "s"}`;
 }
 
+// Card #1367: keep line breaks and lists. textContent only, so a body cannot
+// inject HTML. A thread post is the whole message, never a silent slice.
+function renderReadable(text) {
+  const root = document.createElement("div");
+  root.className = "readable";
+  const lines = String(text == null ? "" : text).split("\n");
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (line.trim() === "") { i++; continue; }
+    if (/^\s*-\s+/.test(line)) {
+      const ul = document.createElement("ul");
+      while (i < lines.length && /^\s*-\s+/.test(lines[i])) {
+        const li = document.createElement("li");
+        li.textContent = lines[i].replace(/^\s*-\s+/, "");
+        ul.append(li);
+        i++;
+      }
+      root.append(ul);
+      continue;
+    }
+    if (/^\s*\d+\.\s+/.test(line)) {
+      const ol = document.createElement("ol");
+      while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) {
+        const li = document.createElement("li");
+        li.textContent = lines[i].replace(/^\s*\d+\.\s+/, "");
+        ol.append(li);
+        i++;
+      }
+      root.append(ol);
+      continue;
+    }
+    const p = document.createElement("p");
+    p.textContent = line;
+    root.append(p);
+    i++;
+  }
+  return root;
+}
+
 async function openToolsCard(id) {
   const detail = $("#tools-card-detail");
   detail.innerHTML = "";
@@ -1974,11 +2014,7 @@ async function openToolsCard(id) {
     const h = document.createElement("h4");
     h.textContent = `#${card.id} ${card.title || ""}`;
     detail.append(h);
-    if (card.body) {
-      const p = document.createElement("p");
-      p.textContent = card.body;
-      detail.append(p);
-    }
+    if (card.body) detail.append(renderReadable(card.body));
     const posts = toolsThreadPosts(thread);
     if (posts.length) {
       const ul = document.createElement("ul");
@@ -1986,7 +2022,9 @@ async function openToolsCard(id) {
       for (const m of posts.slice(-15)) {
         const li = document.createElement("li");
         li.className = "muted";
-        li.textContent = `${m.from_node || m.from || "?"}: ${(m.content || "").slice(0, 280)}`;
+        const who = document.createElement("div");
+        who.textContent = `${m.from_node || m.from || "?"}:`;
+        li.append(who, renderReadable(m.content || ""));
         ul.append(li);
       }
       detail.append(ul);
@@ -2309,7 +2347,9 @@ async function openToolsChannel(name) {
     for (const m of posts.slice(-15)) {
       const li = document.createElement("li");
       li.className = "muted";
-      li.textContent = `${m.from_node || m.from || "?"}: ${(m.content || "").slice(0, 280)}`;
+      const who = document.createElement("div");
+      who.textContent = `${m.from_node || m.from || "?"}:`;
+      li.append(who, renderReadable(m.content || ""));
       ul.append(li);
     }
     detail.append(ul);
